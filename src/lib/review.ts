@@ -6,6 +6,7 @@ import {
   artifacts,
   memoryRecords,
   observations,
+  recordDerivations,
   reviews,
   type Artifact,
   type ArtifactStatus,
@@ -24,10 +25,27 @@ export type EvidenceView = {
   recordStatus: string | null;
 };
 
+/**
+ * Why an artifact is stale. Either it cites a record that was superseded
+ * directly, or it cites a record that was *compiled from* one that was —
+ * `hops` is how far up the derivation chain the change happened.
+ */
+export type StaleCause = {
+  citedRecordId: string;
+  citedKey: string | null;
+  citedType: string | null;
+  rootKey: string;
+  rootType: string;
+  rootId: string;
+  hops: number;
+};
+
 export type ArtifactView = Artifact & {
   evidence: EvidenceView[];
-  /** Evidence citing a superseded record — why the artifact went stale. */
+  /** Evidence citing a superseded record — direct staleness. */
   staleEvidence: EvidenceView[];
+  /** Direct and indirect causes, with the changed record named. */
+  staleCauses: StaleCause[];
   observationCount: number;
 };
 
@@ -60,12 +78,87 @@ async function hydrate(rows: Artifact[]): Promise<ArtifactView[]> {
 
   const obsByArtifact = new Map(obs.map((o) => [o.artifactId, o.n]));
 
+  /*
+   * Walk *up* the derivation graph from every cited record to find superseded
+   * ancestors. An artifact can be stale without citing anything superseded: it
+   * cites a positioning record that is still active, but that record was
+   * compiled from a product fact a human has since corrected. Reporting only
+   * direct citations would tell the reviewer nothing changed.
+   *
+   * The path array prevents revisiting a node already on the current path.
+   * Without it, `UNION` dedups the whole row and a node reachable at several
+   * depths multiplies out across diamond-shaped paths.
+   */
+  const citedIds = [
+    ...new Set(ev.map((e) => e.memoryRecordId).filter((id): id is string => !!id)),
+  ];
+
+  const causes: StaleCause[] = [];
+  if (citedIds.length > 0) {
+    const walked = await db.execute<{
+      cited_id: string;
+      root_id: string;
+      root_key: string;
+      root_type: string;
+      depth: number;
+    }>(sql`
+      with recursive up(cited_id, id, depth, path) as (
+        select m.id, m.id, 0, array[m.id]
+        from ${memoryRecords} m
+        where m.id in (${sql.join(citedIds.map((id) => sql`${id}::uuid`), sql`, `)})
+        union all
+        select u.cited_id, rd.source_record_id, u.depth + 1,
+               u.path || rd.source_record_id
+        from ${recordDerivations} rd
+        join up u on rd.derived_record_id = u.id
+        where u.depth < 16
+          and not rd.source_record_id = any(u.path)
+      )
+      select distinct u.cited_id, m.id as root_id, m.key as root_key,
+             m.type::text as root_type, u.depth
+      from up u
+      join ${memoryRecords} m on m.id = u.id
+      where m.status = 'superseded'
+    `);
+
+    for (const w of walked.rows) {
+      const cited = ev.find((e) => e.memoryRecordId === w.cited_id);
+      causes.push({
+        citedRecordId: w.cited_id,
+        citedKey: cited?.recordKey ?? null,
+        citedType: cited?.recordType ?? null,
+        rootId: w.root_id,
+        rootKey: w.root_key,
+        rootType: w.root_type,
+        hops: Number(w.depth),
+      });
+    }
+  }
+
   return rows.map((r) => {
     const mine = ev.filter((e) => e.artifactId === r.id);
+    const mineIds = new Set(mine.map((e) => e.memoryRecordId));
     return {
       ...r,
       evidence: mine,
       staleEvidence: mine.filter((e) => e.recordStatus === "superseded"),
+      /*
+       * Nearest cause first: a direct supersede is more useful to a reviewer
+       * than a four-hop ancestor. Deduplicated per cited/root pair, because a
+       * diamond in the derivation graph reaches the same ancestor by several
+       * path lengths and listing each one says nothing extra.
+       */
+      staleCauses: [
+        ...causes
+          .filter((c) => mineIds.has(c.citedRecordId))
+          .sort((a, b) => a.hops - b.hops)
+          .reduce((seen, c) => {
+            const key = `${c.citedRecordId}:${c.rootId}`;
+            if (!seen.has(key)) seen.set(key, c);
+            return seen;
+          }, new Map<string, StaleCause>())
+          .values(),
+      ],
       observationCount: obsByArtifact.get(r.id) ?? 0,
     };
   });

@@ -49,18 +49,39 @@ function ArtifactCard({ artifact }: { artifact: ArtifactView }) {
       {artifact.status === "stale" && (
         <div className="mb-3 rounded border border-warn/40 bg-warn/10 p-2.5 space-y-2">
           <p className="text-[12px] text-warn">
-            Stale. {artifact.staleEvidence.length} memory record
-            {artifact.staleEvidence.length === 1 ? "" : "s"} this draft was
-            derived from{" "}
-            {artifact.staleEvidence.length === 1 ? "has" : "have"} been
-            superseded since it was written:
+            Stale. The memory this draft rests on has changed since it was
+            written:
           </p>
-          <ul className="text-[11px] text-warn/90 space-y-0.5">
-            {artifact.staleEvidence.map((e) => (
-              <li key={e.id} className="font-mono">
-                · {e.recordType}: {e.recordKey}
+          <ul className="text-[11px] text-warn/90 space-y-1">
+            {artifact.staleCauses.map((c) => (
+              <li key={`${c.citedRecordId}-${c.rootId}`}>
+                {c.hops === 0 ? (
+                  <span className="font-mono">
+                    · {c.rootType}: {c.rootKey} was superseded
+                  </span>
+                ) : (
+                  <span>
+                    <span className="font-mono">
+                      · {c.citedType}: {c.citedKey}
+                    </span>{" "}
+                    was compiled from{" "}
+                    <span className="font-mono">
+                      {c.rootType}: {c.rootKey}
+                    </span>
+                    , which was superseded{" "}
+                    <span className="text-warn/70">
+                      ({c.hops} hop{c.hops === 1 ? "" : "s"} upstream)
+                    </span>
+                  </span>
+                )}
               </li>
             ))}
+            {artifact.staleCauses.length === 0 &&
+              artifact.staleEvidence.map((e) => (
+                <li key={e.id} className="font-mono">
+                  · {e.recordType}: {e.recordKey} was superseded
+                </li>
+              ))}
           </ul>
           <RegenerateButton artifactId={artifact.id} />
         </div>

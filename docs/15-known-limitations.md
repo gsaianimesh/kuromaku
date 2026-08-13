@@ -97,30 +97,51 @@ allow real transactions and let the claim query return to the conventional
 `SELECT … FOR UPDATE` + `UPDATE` shape. That is the single highest-value
 refactor available.
 
-### `agent_runs` cascade-deletes with its job
+### Derivation edges over-approximate
 
-```ts
-jobId: uuid("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
-```
+Every record a stage emits gets an edge to every record in that stage's
+dependency slice, because the stage saw them together and cannot report which
+one it actually leaned on. Editing any record in the slice therefore marks
+everything the stage produced as downstream, including records that did not in
+fact depend on it.
 
-Deleting a job destroys its model-call audit trail. This is not theoretical — a
-cleanup during development removed 19 of 22 `agent_runs` rows, and with them the
-cost history.
+This errs toward marking too much stale rather than too little, which is the
+safer direction, but it means the stale count is an upper bound. Asking the model
+to name the records it used per emitted record would tighten it, at the cost of
+trusting a self-report the system otherwise refuses to trust.
 
-Given SPEC section 4 requires every model call to be logged and inspectable,
-`ON DELETE SET NULL` with a nullable `job_id`, or an archival table, would be
-more appropriate.
+### A re-compile supersedes records without marking derived artifacts stale
 
-### Staleness propagates exactly one hop
+Only `editRecord` propagates. The compiler supersedes a record whenever a stage
+emits a new value for a key it has seen before, and that path never calls the
+staleness walk, so a draft resting on a fact the compiler has since revised keeps
+looking current.
 
-An artifact goes stale when a record it *directly* cites is superseded. Memory
-records do not record derivation edges between themselves, so editing a
-`product_fact` does not mark the `positioning` record that was compiled from it
-stale — even though the compiler passed that fact into the positioning prompt.
+Found while capturing screenshots for the submission document: after three
+re-compiles, no draft in the queue cited a record that was still active, and
+nothing in the interface said so. The evidence panel still shows `(superseded)`
+against the individual citation, so the information is not lost, but the artifact
+status does not move and the queue cannot be filtered by it.
 
-The information exists at compile time. Recording it would mean a
-`record_derivations` table written by `compileWorkspace`, and a recursive walk
-in `editRecord`. This is a genuine gap in the central claim of the system.
+Re-compiling is arguably the more common path in production — a nightly crawl
+picks up a changed pricing page long before a human opens the memory editor — so
+this is the propagation case that matters most. The machinery already exists;
+`writeRecord` simply does not call it. See
+[04-memory-semantics](04-memory-semantics.md#staleness-propagation).
+
+### Fixtures in the capture scripts wrote through the invariant
+
+`scripts/pairs.ts` needs two unmeasured drafts in a channel to trigger the
+planner's gate, and it inserted them straight into `artifacts` rather than
+through `runAgent`. That bypassed the check that every draft carries evidence,
+leaving rows the review queue correctly labelled "No evidence. This should be
+impossible" — one of which reached a screenshot in a draft of the submission
+document before review caught it.
+
+The script now attaches evidence like any real draft and deletes its fixtures
+once the pair is captured. The general lesson holds beyond this script: an
+invariant enforced in one code path is not enforced, and the database has no
+constraint expressing "a draft has at least one evidence row".
 
 ### The compile summary is not persisted
 
@@ -206,12 +227,11 @@ Unblocks the active-record unique index, makes `editRecord` atomic, and lets the
 claim query use the conventional shape. Everything below is easier afterwards,
 and the correctness gaps above mostly disappear.
 
-### 2. Record derivation edges between memory records
+### 2. Propagate staleness on re-compile, not only on human edit
 
-A `record_derivations` table written during compile, and a recursive walk in
-`editRecord`. Today the system claims "editing a memory record invalidates what
-came from it" and delivers that only for artifacts. Making it true for records
-too closes the gap between the claim and the implementation.
+`writeRecord` already knows which record it superseded and the walk it would
+need is the one `editRecord` calls. This closes the propagation case that fires
+most often in production and needs no new machinery.
 
 ### 3. Make the compiler resumable
 

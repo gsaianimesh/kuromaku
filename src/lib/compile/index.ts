@@ -3,6 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "../db";
 import {
   memoryRecords,
+  recordDerivations,
   recordSources,
   sources,
   type MemoryRecord,
@@ -115,7 +116,7 @@ async function writeRecord(
   locale: string,
   emitted: EmittedRecord,
   citations: Array<{ sourceId?: string; url?: string; snippet?: string }>,
-): Promise<{ superseded: boolean }> {
+): Promise<{ superseded: boolean; recordId: string }> {
   const db = getDb();
 
   const [prior] = await db
@@ -170,7 +171,7 @@ async function writeRecord(
     );
   }
 
-  return { superseded: Boolean(prior) };
+  return { superseded: Boolean(prior), recordId: created.id };
 }
 
 /** Search queries for the competitors stage, derived from compiled positioning. */
@@ -364,6 +365,13 @@ ${renderPriorRecords(dependencies)}${keyNote}${sourcesSection}${searchBlock}`;
       let sourced = 0;
       let unsourced = 0;
       let supersededCount = 0;
+      let edges = 0;
+
+      // Ids of the records that were in this stage's prompt. Every record the
+      // stage emits is derived from all of them — the stage saw them together
+      // and cannot say which one it leaned on, so the edge set is the whole
+      // dependency slice rather than a guess at a subset.
+      const dependencyIds = dependencies.map((d) => d.id);
 
       for (const record of emitted) {
         // Resolve citations against what the model was actually shown.
@@ -385,13 +393,28 @@ ${renderPriorRecords(dependencies)}${keyNote}${sourcesSection}${searchBlock}`;
           }
         }
 
-        const { superseded } = await writeRecord(
+        const { superseded, recordId } = await writeRecord(
           workspaceId,
           stage.memoryType,
           effectiveLocale,
           record,
           citations,
         );
+
+        if (dependencyIds.length > 0) {
+          await db
+            .insert(recordDerivations)
+            .values(
+              dependencyIds.map((sourceRecordId) => ({
+                workspaceId,
+                derivedRecordId: recordId,
+                sourceRecordId,
+                stage: stage.id,
+              })),
+            )
+            .onConflictDoNothing();
+          edges += dependencyIds.length;
+        }
 
         if (citations.length > 0) sourced++;
         else unsourced++;
@@ -464,7 +487,7 @@ ${renderPriorRecords(dependencies)}${keyNote}${sourcesSection}${searchBlock}`;
       summary.totalUnsourced += unsourced;
 
       log(
-        `stage ${label}: ${emitted.length} record(s), ${sourced} sourced, ${unsourced} unsourced, ${supersededCount} superseded`,
+        `stage ${label}: ${emitted.length} record(s), ${sourced} sourced, ${unsourced} unsourced, ${supersededCount} superseded, ${edges} derivation edge(s)`,
       );
     }
   }

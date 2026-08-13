@@ -138,6 +138,39 @@ recorded here rather than hidden.
 unsourced and renders a warning. There is deliberately no nullable placeholder
 row that would hide the distinction.
 
+### `record_derivations`
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | uuid pk | |
+| `workspace_id` | uuid → workspaces, cascade | |
+| `derived_record_id` | uuid → memory_records, cascade | The record a stage produced |
+| `source_record_id` | uuid → memory_records, cascade | A record that was in the prompt when it was produced |
+| `stage` | text not null | Which compile stage created the edge |
+| `created_at` | timestamptz not null | |
+
+```sql
+CREATE UNIQUE INDEX "record_derivations_edge_uq"
+  ON "record_derivations" USING btree ("derived_record_id","source_record_id");
+CREATE INDEX "record_derivations_source_idx"
+  ON "record_derivations" USING btree ("source_record_id");
+```
+
+**Database-enforced:** one edge per ordered pair. The compiler writes edges with
+`ON CONFLICT DO NOTHING`, so a re-compile that produces the same pair is a
+no-op.
+
+**Why the second index is on `source_record_id`:** the recursive walk traverses
+source to derived, so that is the direction that needs to be fast. The unique
+index leads on `derived_record_id` and does not serve the walk.
+
+**What an edge means.** A stage receives its dependency records as prompt
+context and emits new records. Every emitted record gets an edge to *every*
+record in that dependency slice. The stage saw them together and cannot say
+which one it leaned on, so the edge set is the whole slice rather than a guess
+at a subset. That over-approximates: it marks slightly more stale than strictly
+necessary, which is the safer direction.
+
 ### `research_cache`
 
 | Column | Type | Meaning |
@@ -230,7 +263,8 @@ Index supporting it: `jobs_claim_idx` on `(status, run_after, created_at)`.
 | Column | Type | Meaning |
 |---|---|---|
 | `id` | uuid pk | |
-| `job_id` | uuid → jobs, **cascade** | |
+| `job_id` | uuid → jobs, **set null**, nullable | Detaches rather than cascading |
+| `job_type` | text nullable | Kept verbatim so a detached run still says what it belonged to |
 | `agent_id` | text not null | e.g. `compiler:product_facts`, `launch_community:critic` |
 | `model` | text not null | The model actually served |
 | `prompt` | text nullable | System and user turns, concatenated |
@@ -241,10 +275,21 @@ Index supporting it: `jobs_claim_idx` on `(status, run_after, created_at)`.
 | `duration_ms` | integer nullable | |
 | `created_at` | timestamptz not null | |
 
-**The cascade is a data-loss hazard.** Deleting a job destroys its model-call
-audit trail. This was observed during development: cleaning up test jobs removed
-19 of 22 `agent_runs` rows. See
-[15 — Known limitations](15-known-limitations.md).
+**This used to cascade, and that was a data-loss hazard.** Deleting a job
+destroyed its model-call audit trail; a cleanup during development silently
+removed 19 of 22 `agent_runs` rows and with them the only record of what those
+calls cost. `job_id` is now nullable with `ON DELETE SET NULL`, and `job_type`
+carries the job's type on the row so a detached run still says what it belonged
+to. An audit trail that disappears when the thing it audits is tidied away is
+not an audit trail.
+
+```sql
+ALTER TABLE "agent_runs" DROP CONSTRAINT "agent_runs_job_id_jobs_id_fk";
+ALTER TABLE "agent_runs" ALTER COLUMN "job_id" DROP NOT NULL;
+ALTER TABLE "agent_runs" ADD COLUMN "job_type" text;
+ALTER TABLE "agent_runs" ADD CONSTRAINT "agent_runs_job_id_jobs_id_fk"
+  FOREIGN KEY ("job_id") REFERENCES "public"."jobs"("id") ON DELETE set null;
+```
 
 ### `artifacts`
 

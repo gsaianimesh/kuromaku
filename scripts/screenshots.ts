@@ -86,6 +86,12 @@ async function capture(page: Page, shot: Shot) {
   const target: Page | Locator = shot.crop ? page.locator(shot.crop).first() : page;
   const file = path.join(OUT, shot.file);
 
+  /*
+   * Crops keep PNG: they carry the specific claim and their text has to stay
+   * crisp. Full-page shots are context and compress far better as JPEG — the
+   * whole set is embedded as base64 in a single HTML file, where PNG full-pages
+   * alone ran to several megabytes each.
+   */
   if (shot.crop) {
     const locator = target as Locator;
     if ((await locator.count()) === 0) {
@@ -96,7 +102,12 @@ async function capture(page: Page, shot: Shot) {
     await page.waitForTimeout(200);
     await locator.screenshot({ path: file });
   } else {
-    await page.screenshot({ path: file, fullPage: shot.fullPage ?? true });
+    await page.screenshot({
+      path: file.replace(/\.png$/, ".jpg"),
+      fullPage: shot.fullPage ?? true,
+      type: "jpeg",
+      quality: 82,
+    });
   }
 
   console.log(`  ${shot.file.padEnd(34)} ${shot.note}`);
@@ -167,6 +178,13 @@ async function main() {
       crop: "li:has-text('No source.')",
       mustContain: ["No source."],
       note: "an unsourced record with its warning",
+    },
+    {
+      file: "competitor-sourced.png",
+      route: "/memory",
+      requires: "section:has(h2:text-is('Competitors')) li",
+      crop: "section:has(h2:text-is('Competitors')) li:has(a[href^='http'])",
+      note: "a competitor record with its resolved search-result source",
     },
     {
       file: "memory-history.png",

@@ -45,3 +45,14 @@ verify-out.txt
 
 # stray scratch scripts
 *.mts
+
+# job logs written by long-running scripts
+*-progress.log
+recompile.log
+
+# local agent instructions, not part of the project
+CLAUDE.md
+AGENTS.md
+
+# rendered page previews used while tuning the submission layout
+submission/_preview/

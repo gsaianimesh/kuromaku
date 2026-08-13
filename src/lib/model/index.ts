@@ -23,7 +23,11 @@ export type ModelTask = "compile" | "critique" | "draft" | "classify";
 
 export const MODEL_CONFIG: Record<ModelProviderId, Record<ModelTask, string>> = {
   groq: {
-    compile: "openai/gpt-oss-120b",
+    // gpt-oss-120b is the stronger model but reports the lowest token budget on
+    // this tier (8,000/min against llama-3.3-70b's 12,000), and large compile
+    // prompts routinely stalled inside it. Compilation is the longest chain and
+    // the most budget-hungry, so it runs on the model that can actually finish.
+    compile: "llama-3.3-70b-versatile",
     critique: "openai/gpt-oss-120b",
     draft: "llama-3.3-70b-versatile",
     classify: "llama-3.1-8b-instant",
@@ -49,6 +53,8 @@ export type RunModelInput = {
   workspaceId: string;
   /** Every model call belongs to a job, so the run inspector can find it. */
   jobId: string;
+  /** Kept on the row so a detached run still says what it belonged to. */
+  jobType?: string;
   /** Which agent or compiler stage made the call. */
   agentId: string;
   task: ModelTask;
@@ -106,6 +112,7 @@ export async function runModel(input: RunModelInput): Promise<ModelResponse> {
 
     await db.insert(agentRuns).values({
       jobId: input.jobId,
+      jobType: input.jobType,
       agentId: input.agentId,
       model: response.model,
       prompt: promptForLog,
@@ -122,6 +129,7 @@ export async function runModel(input: RunModelInput): Promise<ModelResponse> {
     const message = e instanceof Error ? e.message : String(e);
     await db.insert(agentRuns).values({
       jobId: input.jobId,
+      jobType: input.jobType,
       agentId: input.agentId,
       model,
       prompt: promptForLog,

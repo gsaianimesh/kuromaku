@@ -185,6 +185,50 @@ export const recordSources = pgTable(
   (t) => [index("record_sources_record_idx").on(t.recordId)],
 );
 
+/**
+ * Which memory records were compiled from which other memory records.
+ *
+ * The compiler passes earlier records into later stages as prompt context — a
+ * positioning statement is derived from product facts and ICP segments. Without
+ * recording that, editing a product fact could not invalidate the positioning
+ * built on it, and the system's central claim ("editing a record invalidates
+ * what came from it") held only for artifacts, one hop away.
+ *
+ * Edges are written at compile time, when the dependency set is already known,
+ * and are walked recursively by editRecord.
+ */
+export const recordDerivations = pgTable(
+  "record_derivations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    /** The record the stage produced. */
+    derivedRecordId: uuid("derived_record_id")
+      .notNull()
+      .references(() => memoryRecords.id, { onDelete: "cascade" }),
+    /** A record that was in the prompt when it was produced. */
+    sourceRecordId: uuid("source_record_id")
+      .notNull()
+      .references(() => memoryRecords.id, { onDelete: "cascade" }),
+    /** Which compile stage created the edge, for tracing. */
+    stage: text("stage").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("record_derivations_edge_uq").on(
+      t.derivedRecordId,
+      t.sourceRecordId,
+    ),
+    // The recursive walk traverses source → derived, so that direction is the
+    // one that needs an index.
+    index("record_derivations_source_idx").on(t.sourceRecordId),
+  ],
+);
+
 export const researchCache = pgTable(
   "research_cache",
   {
@@ -257,14 +301,22 @@ export const jobs = pgTable(
   ],
 );
 
-/** One row per model call. SPEC section 4: every call is logged and inspectable. */
+/**
+ * One row per model call. SPEC section 4: every call is logged and inspectable.
+ *
+ * `job_id` is nullable and detaches rather than cascading. Deleting a job used
+ * to destroy its model-call history along with it — a cleanup during
+ * development silently removed 19 of 22 rows, and with them the only record of
+ * what those calls cost. An audit trail that disappears when the thing it
+ * audits is tidied away is not an audit trail.
+ */
 export const agentRuns = pgTable(
   "agent_runs",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    jobId: uuid("job_id")
-      .notNull()
-      .references(() => jobs.id, { onDelete: "cascade" }),
+    jobId: uuid("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    /** Kept verbatim so a detached run still says what it belonged to. */
+    jobType: text("job_type"),
     agentId: text("agent_id").notNull(),
     model: text("model").notNull(),
     prompt: text("prompt"),

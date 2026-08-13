@@ -5,6 +5,7 @@ import {
   artifactEvidence,
   artifacts,
   memoryRecords,
+  recordDerivations,
   recordSources,
   sources,
   type MemoryRecord,
@@ -202,11 +203,18 @@ export async function memoryStats(workspaceId: string): Promise<{
  * Returns the ids of artifacts that went stale, so the UI can say exactly what
  * this edit invalidated — the headline demo moment.
  */
+export type EditResult = {
+  newRecordId: string;
+  staleArtifactIds: string[];
+  /** Records downstream of the edit, including the edited one. */
+  affectedRecordIds: string[];
+};
+
 export async function editRecord(
   recordId: string,
   newValue: Record<string, unknown>,
   confidence: number,
-): Promise<{ newRecordId: string; staleArtifactIds: string[] }> {
+): Promise<EditResult> {
   const db = getDb();
 
   const [prior] = await db
@@ -248,11 +256,41 @@ export async function editRecord(
     snippet: "Asserted by a human via the memory editor.",
   });
 
-  // Staleness propagation: anything whose evidence cites the superseded record.
+  /*
+   * Staleness propagation, transitively.
+   *
+   * The edited record is the root. Everything compiled from it, and everything
+   * compiled from those, is downstream — a product fact feeds positioning,
+   * positioning feeds messaging pillars, and a draft citing any of them rests
+   * on the fact that just changed. A one-hop rule would mark only the drafts
+   * citing the root and leave the rest looking current.
+   *
+   * The path array is what makes this terminate. `UNION` alone dedups on the
+   * whole row, so a node reachable at several depths yields one row per depth
+   * and diamond-shaped paths multiply combinatorially — which hung a real run
+   * on a 199-edge graph. Carrying the path and excluding nodes already on it
+   * prevents both cycles and revisits; the depth cap is belt and braces.
+   */
+  const affected = await db.execute<{ id: string }>(sql`
+    with recursive downstream(id, depth, path) as (
+      select ${prior.id}::uuid, 0, array[${prior.id}::uuid]
+      union all
+      select rd.derived_record_id, d.depth + 1, d.path || rd.derived_record_id
+      from ${recordDerivations} rd
+      join downstream d on rd.source_record_id = d.id
+      where d.depth < 16
+        and not rd.derived_record_id = any(d.path)
+    )
+    select distinct id from downstream
+  `);
+
+  const affectedRecordIds = affected.rows.map((r) => r.id);
+
+  // Any artifact whose evidence cites the root or anything downstream of it.
   const derived = await db
     .selectDistinct({ artifactId: artifactEvidence.artifactId })
     .from(artifactEvidence)
-    .where(eq(artifactEvidence.memoryRecordId, prior.id));
+    .where(inArray(artifactEvidence.memoryRecordId, affectedRecordIds));
 
   const staleArtifactIds = derived.map((d) => d.artifactId);
 
@@ -270,5 +308,40 @@ export async function editRecord(
       );
   }
 
-  return { newRecordId: created.id, staleArtifactIds };
+  return { newRecordId: created.id, staleArtifactIds, affectedRecordIds };
+}
+
+/**
+ * Records compiled from this one, transitively. Used by the memory viewer to
+ * show what an edit would invalidate before the edit is made.
+ */
+export async function downstreamOf(recordId: string): Promise<
+  Array<{ id: string; type: string; key: string; depth: number }>
+> {
+  const db = getDb();
+  const rows = await db.execute<{
+    id: string;
+    type: string;
+    key: string;
+    depth: number;
+  }>(sql`
+    with recursive downstream(id, depth, path) as (
+      select ${recordId}::uuid, 0, array[${recordId}::uuid]
+      union all
+      select rd.derived_record_id, d.depth + 1, d.path || rd.derived_record_id
+      from ${recordDerivations} rd
+      join downstream d on rd.source_record_id = d.id
+      where d.depth < 16
+        and not rd.derived_record_id = any(d.path)
+    ),
+    shallowest as (
+      select distinct on (id) id, depth from downstream order by id, depth
+    )
+    select m.id, m.type::text as type, m.key, d.depth
+    from shallowest d
+    join ${memoryRecords} m on m.id = d.id
+    where d.depth > 0 and m.status = 'active'
+    order by d.depth, m.type, m.key
+  `);
+  return rows.rows;
 }

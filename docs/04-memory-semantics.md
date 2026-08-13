@@ -198,35 +198,53 @@ presented is the prior version's value.
 
 ## Staleness propagation
 
-Staleness is computed at edit time by walking `artifact_evidence`. There is no
-background job and no scheduled scan.
+Staleness is computed at edit time. There is no background job and no scheduled
+scan.
 
-From `editRecord`:
+It runs in two steps: find every record downstream of the edit, then find every
+artifact citing any of them.
 
 ```ts
-// Staleness propagation: anything whose evidence cites the superseded record.
+const affected = await db.execute<{ id: string }>(sql`
+  with recursive downstream(id, depth, path) as (
+    select ${prior.id}::uuid, 0, array[${prior.id}::uuid]
+    union all
+    select rd.derived_record_id, d.depth + 1, d.path || rd.derived_record_id
+    from ${recordDerivations} rd
+    join downstream d on rd.source_record_id = d.id
+    where d.depth < 16
+      and not rd.derived_record_id = any(d.path)
+  )
+  select distinct id from downstream
+`);
+
+const affectedRecordIds = affected.rows.map((r) => r.id);
+
+// Any artifact whose evidence cites the root or anything downstream of it.
 const derived = await db
   .selectDistinct({ artifactId: artifactEvidence.artifactId })
   .from(artifactEvidence)
-  .where(eq(artifactEvidence.memoryRecordId, prior.id));
-
-const staleArtifactIds = derived.map((d) => d.artifactId);
-
-if (staleArtifactIds.length > 0) {
-  await db
-    .update(artifacts)
-    .set({ status: "stale" })
-    .where(
-      and(
-        inArray(artifacts.id, staleArtifactIds),
-        inArray(artifacts.status, ["draft", "approved", "rejected"]),
-      ),
-    );
-}
+  .where(inArray(artifactEvidence.memoryRecordId, affectedRecordIds));
 ```
 
-Note the id being matched is `prior.id` — the row being *superseded*, not the
-new one. Evidence pointing at the old version is what makes an artifact stale.
+The root of the walk is `prior.id` — the row being *superseded*, not the new
+one.
+
+### Why the walk carries its path
+
+The obvious formulation is `UNION` without the `path` column, on the reasoning
+that `UNION` deduplicates and therefore terminates on a cycle. It does not
+terminate usefully here. `UNION` deduplicates the whole **row**, and the row
+includes `depth`, so a node reachable at three different depths produces three
+distinct rows rather than one. In a derivation graph that is dense with
+diamonds — a product fact feeding several ICP segments that all feed the same
+positioning record — the row count multiplies at every level.
+
+This was not theoretical. On a 199-edge graph the query stopped returning and
+hung a screenshot capture run. Carrying the visited path and excluding any node
+already on it makes each path visit a node at most once, and the same query
+returns in under a second across 19 downstream records. The depth cap remains as
+a second bound.
 
 ### Why `published` is excluded
 
@@ -255,17 +273,67 @@ Note it names the exact record — `icp_segment: founders` — rather than sayin
 and click through to read the new version, and **Regenerate from current
 memory** enqueues a fresh run of the same agent on the same channel.
 
-### Propagation is one hop
+### Propagation is transitive
 
-An artifact goes stale when a record it *directly* cites is superseded. There is
-no transitive rule: memory records do not derive from each other in the data
-model, so there is no chain to walk. The compiler passes earlier records into
-later stages as prompt context, which means a positioning record is *influenced*
-by product facts, but that influence is not recorded as an edge. Editing a
-product fact therefore does **not** mark positioning records stale.
+An artifact goes stale when a record it cites is superseded, **or** when any
+record upstream of what it cites is superseded. A product fact feeds positioning,
+positioning feeds messaging pillars, and a draft citing a pillar rests on the
+fact that changed.
 
-This is a real limitation, not a design subtlety — see
-[15 — Known limitations](15-known-limitations.md).
+That chain exists because the compiler records it. Every stage receives its
+dependency records as prompt context, and every record a stage emits gets an edge
+to every record in that slice — see
+[`record_derivations`](03-data-model.md#record_derivations).
+
+A one-hop rule would mark only the drafts citing the edited record and leave the
+rest looking current, which is the defect this system exists to fix, reproduced
+one level down.
+
+### Reporting an indirect cause
+
+An indirectly stale artifact cites records that are themselves still `active`, so
+"which of my citations was superseded" answers *none*. The review layer therefore
+walks *upward* from each cited record to find a superseded ancestor:
+
+```sql
+with recursive up(cited_id, id, depth, path) as (
+  select m.id, m.id, 0, array[m.id] from memory_records m where m.id in (…)
+  union all
+  select u.cited_id, rd.source_record_id, u.depth + 1,
+         u.path || rd.source_record_id
+  from record_derivations rd
+  join up u on rd.derived_record_id = u.id
+  where u.depth < 16
+    and not rd.source_record_id = any(u.path)
+)
+select distinct u.cited_id, m.id as root_id, m.key as root_key,
+       m.type::text as root_type, u.depth
+from up u join memory_records m on m.id = u.id
+where m.status = 'superseded'
+```
+
+`hops` is how far up the change happened: `0` is a direct supersede, anything
+higher is inherited. Causes are sorted nearest-first, because a direct supersede
+is more useful to a reviewer than a four-hop ancestor.
+
+They are also deduplicated per cited/root pair. The same diamond that made the
+downstream walk expensive lets a reviewer reach one ancestor by paths of
+different lengths, and the banner would otherwise list the identical cause twice
+with different hop counts. Only the shortest path to each ancestor survives:
+
+```ts
+staleCauses: [
+  ...causes
+    .filter((c) => mineIds.has(c.citedRecordId))
+    .sort((a, b) => a.hops - b.hops)
+    .reduce((seen, c) => {
+      const key = `${c.citedRecordId}:${c.rootId}`;
+      if (!seen.has(key)) seen.set(key, c);
+      return seen;
+    }, new Map<string, StaleCause>())
+    .values(),
+],
+```
 
 ## Reading the memory
 

@@ -14,7 +14,9 @@
     "verify": "node --conditions=react-server --import tsx scripts/verify.ts",
     "e2e": "node --conditions=react-server --import tsx scripts/e2e.ts",
     "eval": "node --conditions=react-server --import tsx scripts/eval.ts",
-    "screenshots": "node --conditions=react-server --import tsx scripts/screenshots.ts"
+    "screenshots": "node --conditions=react-server --import tsx scripts/screenshots.ts",
+    "pairs": "node --conditions=react-server --import tsx scripts/pairs.ts",
+    "submission": "node --import tsx scripts/build-submission.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",

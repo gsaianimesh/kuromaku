@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Empty, Panel, Row } from "@/components/ui";
-import { getRecord, recordHistory, MEMORY_TYPE_LABELS } from "@/lib/memory";
+import { downstreamOf, getRecord, recordHistory, MEMORY_TYPE_LABELS } from "@/lib/memory";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +15,7 @@ export default async function RecordHistoryPage({
 
   const ws = await getOrCreateDefaultWorkspace();
   const history = await recordHistory(ws.id, record.type, record.key, record.locale);
+  const downstream = await downstreamOf(record.id);
 
   return (
     <div className="max-w-3xl mx-auto p-4 space-y-3">
@@ -83,6 +84,43 @@ export default async function RecordHistoryPage({
               </li>
             ))}
           </ol>
+        )}
+      </Panel>
+
+      <Panel
+        title="What an edit here would invalidate"
+        hint="records compiled from this one, and from those"
+      >
+        {downstream.length === 0 ? (
+          <Empty>
+            Nothing is compiled from this record. Editing it would affect only
+            artifacts that cite it directly.
+          </Empty>
+        ) : (
+          <>
+            <p className="text-[12px] text-muted mb-2">
+              {downstream.length} record
+              {downstream.length === 1 ? "" : "s"} downstream. Editing this
+              record marks every artifact citing any of them as stale, not just
+              the ones citing this record.
+            </p>
+            <ul className="space-y-0.5">
+              {downstream.map((d) => (
+                <li key={d.id} className="text-[11px] flex items-baseline gap-2">
+                  <span className="text-dim font-mono w-12 shrink-0">
+                    hop {d.depth}
+                  </span>
+                  <Badge>{d.type}</Badge>
+                  <Link
+                    href={`/memory/${d.id}`}
+                    className="text-accent hover:underline font-mono"
+                  >
+                    {d.key}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </Panel>
 
