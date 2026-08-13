@@ -14,6 +14,7 @@ import { eq, inArray, like, sql } from "drizzle-orm";
 import { getDb } from "../src/lib/db";
 import { jobs, settings, sources } from "../src/lib/db/schema";
 import { crawlSite } from "../src/lib/ingest/crawl";
+import { hashQuery, normaliseQuery } from "../src/lib/search";
 import { runHealthChecks } from "../src/lib/health";
 import { getKeyStatus, saveModelKey } from "../src/lib/settings";
 import { getOrCreateDefaultWorkspace } from "../src/lib/workspace";
@@ -333,11 +334,19 @@ async function main() {
       `${hashes.size} distinct hashes across ${stored.length} rows`,
     );
 
-    // Re-crawl adds nothing: the acceptance check for this phase.
+    /*
+     * Re-crawl adds nothing: the acceptance check for this phase.
+     *
+     * Capped to a few pages deliberately. Proving the dedup only needs pages
+     * that are already stored to come back as unchanged; refetching the whole
+     * site to prove it turns the fast check into a multi-minute one, and it is
+     * hostage to how quickly the target responds.
+     */
     const recrawl = await crawlSite({
       workspaceId: ws.id,
       domain: ws.domain,
-      maxPages: 30,
+      maxPages: 3,
+      budgetMs: 30_000,
     });
     const after = await db
       .select({ n: sql<number>`count(*)::int` })
@@ -345,8 +354,10 @@ async function main() {
       .where(eq(sources.workspaceId, ws.id));
     check(
       "Re-crawling adds nothing",
-      recrawl.stored === 0 && after[0].n === stored.length,
-      `re-crawl stored ${recrawl.stored}, matched ${recrawl.duplicates} unchanged; source count stayed at ${after[0].n}`,
+      recrawl.stored === 0 &&
+        after[0].n === stored.length &&
+        recrawl.duplicates > 0,
+      `re-crawl of ${recrawl.visited} page(s) stored ${recrawl.stored}, matched ${recrawl.duplicates} unchanged; source count stayed at ${after[0].n}`,
     );
     check(
       "robots.txt was read and respected",
@@ -354,6 +365,27 @@ async function main() {
       recrawl.robotsStatus,
     );
   }
+
+  // Research dedup (SPEC section 5). Pure normalisation, so it runs without a
+  // search provider configured and without touching the network.
+  const spellings = [
+    "Acme Corp alternatives",
+    "  Acme   Corp   Alternatives?  ",
+    "acme corp alternatives.",
+    "ACME CORP ALTERNATIVES!!",
+    "\tAcme\nCorp alternatives  ;",
+  ];
+  const normalised = new Set(spellings.map(normaliseQuery));
+  const hashes = new Set(
+    [...normalised].map((q) => hashQuery(q, "tavily")),
+  );
+  check(
+    "Query spellings normalise to one cache key",
+    normalised.size === 1 && hashes.size === 1,
+    normalised.size === 1
+      ? `5 spellings → "${[...normalised][0]}" → 1 hash`
+      : `produced ${normalised.size} distinct queries: ${JSON.stringify([...normalised])}`,
+  );
 
   // Idempotency scope: a completed job releases its key so work can re-run.
   const rerunKey = `${PREFIX}rerun`;
