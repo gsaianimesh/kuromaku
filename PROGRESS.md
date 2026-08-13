@@ -346,9 +346,16 @@ returned records with their sources and `unsourced` counts.
   snippets at 150 characters in the prompt and 300 in the schema, and by telling the
   retry the real cause — a length problem, not a JSON problem, so it returns something
   shorter rather than the same too-long answer.
-- **Neon's HTTP endpoint occasionally returns `fetch failed`** from this machine. It
-  took down one long e2e run mid-flight. The same network also intercepts TLS to
-  `vercel.com`, so this looks environmental rather than a driver problem.
+- **Neon's HTTP endpoint occasionally returns `fetch failed`** from this machine —
+  it killed one e2e run mid-flight and later took down a page render. The same
+  network intercepts TLS to `vercel.com`, so the cause looks environmental. The
+  failure mode was not acceptable regardless, so `getDb()` now installs a
+  retrying fetch on the Neon driver: a *thrown* fetch is retried twice with
+  backoff, an HTTP error response never is. A throw means no response headers
+  arrived, so the query almost certainly never reached Postgres; the narrow risk
+  is a processed request whose response was lost, which retrying could re-apply.
+  That trade is deliberate — the failure being fixed is common and total, the one
+  being risked is rare and partial.
 - **Web research is unconfigured**, so the competitors stage produces nothing rather
   than inventing competitors. That is the designed behaviour and worth demoing, but
   it does mean the comparison-page path of the content agent cannot run until a
