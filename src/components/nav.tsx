@@ -10,6 +10,11 @@ import { usePathname } from "next/navigation";
 const LINKS = [
   { href: "/", label: "Overview" },
   { href: "/sources", label: "Sources" },
+  { href: "/memory", label: "Memory" },
+  { href: "/review", label: "Review" },
+  { href: "/planner", label: "Planner" },
+  { href: "/publish", label: "Publish" },
+  { href: "/metrics", label: "Metrics" },
   { href: "/jobs", label: "Jobs" },
   { href: "/settings", label: "Settings" },
   { href: "/health", label: "Health" },
