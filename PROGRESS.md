@@ -57,3 +57,69 @@ on account access (see Deferred).
 | Live URL loads | **deferred** | Blocked on `vercel link`. Verified locally: `/`, `/health`, `/settings`, `/api/health` all return 200 from a production build. |
 | Key saves and round trips | **pass** | `npm run verify` — key stored as a 72-char ciphertext envelope, read back from Postgres and decrypted, tail matches input. |
 | Migrations run clean | **pass** | `npm run db:migrate` applied `0000_phase0_workspaces_settings`; health reports 2/2 expected tables. |
+
+---
+
+## Phase 1 — Schema and jobs
+
+**Status:** complete. All acceptance checks pass. 18/18 in `npm run verify`.
+
+### Built
+
+- Every table from SPEC §6: `sources`, `memory_records`, `record_sources`, `research_cache`,
+  `jobs`, `agent_runs`, `artifacts`, `artifact_evidence`, `reviews`, `observations`,
+  `coverage_gaps`, on top of Phase 0's `workspaces` and `settings`. Nine Postgres enums for the
+  closed status sets, and indexes covering the queue claim path and the staleness graph.
+- Postgres-backed queue in [src/lib/jobs/queue.ts](src/lib/jobs/queue.ts): idempotent enqueue,
+  atomic claim, retry with exponential backoff, and stale-lock recovery.
+- Handler registry with payload validation folded in, and one `noop` job type.
+- Worker in [src/lib/jobs/worker.ts](src/lib/jobs/worker.ts) with a job cap and a wall-clock
+  budget, exposed at `/api/worker`, driven by a 5-minute Vercel cron and a manual button.
+- Jobs UI: queue table with status counts, an enqueue form, a run-worker button that streams
+  back per-job outcomes and logs, and a per-job inspector at `/jobs/[id]`.
+
+### Decisions
+
+- **Claiming is one statement, not a transaction.** The Neon HTTP driver runs each statement in
+  its own implicit transaction, so a standalone `SELECT … FOR UPDATE SKIP LOCKED` would release
+  its lock before the follow-up UPDATE ran and two workers could claim the same row. The select
+  is nested inside the UPDATE, which keeps lock and write atomic while still using
+  `FOR UPDATE SKIP LOCKED` as SPEC §5 requires. Verified with two concurrent claims taking
+  distinct rows.
+- **The idempotency unique index is partial: `WHERE status <> 'failed'`.** SPEC §6 says the key
+  is unique; SPEC §7.4 says never schedule a key that exists *in a non-failed state*. A plain
+  unique index would let one permanent failure poison that key forever, so the planner could
+  never retry that work. The partial index satisfies both readings. Enqueueing the same key
+  twice while a job is queued, running or done still yields exactly one job.
+- **Added `run_after` and `max_attempts`** to `jobs`, beyond the columns SPEC §6 lists. Retry
+  backoff needs somewhere to record when a job becomes runnable again, and per-job attempt
+  limits belong on the row rather than in a constant. §6 says names are indicative and structure
+  is not, so this reads as within scope.
+- **`agents` is not a table.** SPEC §6 says the registry is seeded in code. Artifacts and runs
+  reference agents by string id with no foreign key.
+- **Stale-lock recovery runs at the start of every worker invocation.** Without it a crashed
+  serverless run strands a row in `running` forever and the work silently never happens — the
+  same class of defect as SPEC §2's duplicate execution, in the other direction.
+- **`content` is never overwritten on artifacts**; human edits go to `content_final`. Edit
+  distance in Phase 5 depends on both surviving.
+
+### Deferred
+
+- **Live Vercel URL.** The deployment exists at `kuromaku-nine.vercel.app` but has no environment
+  variables set, so it answers 503 from `/api/health` with the exact list of what is missing.
+  Setting them needs dashboard access. The health endpoint failing legibly rather than crashing
+  is the designed behaviour.
+- **`CRON_SECRET` is unset**, so `/api/worker` is currently open. Harmless locally — it only
+  drains a queue that only this app fills — but it must be set before the deployment is public.
+
+### Acceptance checks
+
+| Check (SPEC §9) | Result | Evidence |
+| --- | --- | --- |
+| Enqueue a no-op job from the UI, watch it claim, run and complete | **pass** | Verified through the real HTTP route: enqueue → `/api/worker` → `{outcome: "done", durationMs: 414}` with handler logs, job row `status=done, attempts=1, completed_at` set. |
+| Enqueueing the same idempotency key twice creates one job | **pass** | Two enqueues, one row. First returns `created=true`, second `created=false` with the same job id. |
+
+Also verified beyond the stated checks: concurrent claims take distinct rows; a throwing job
+requeues with backoff and retains its error; exhausting `maxAttempts` marks it failed; a failed
+job releases its key; an unregistered job type fails with a readable message; a job whose worker
+died is recovered rather than stranded.

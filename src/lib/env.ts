@@ -6,11 +6,20 @@ import { z } from "zod";
  * import time (which would take the whole app down and violate "never leave
  * main broken").
  */
+/**
+ * Hosting dashboards frequently hand back "" for a variable that was never
+ * filled in. Treat empty as absent so an optional variable stays optional.
+ */
+const optionalStr = z.preprocess(
+  (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+  z.string().optional(),
+);
+
 const serverEnvSchema = z.object({
   // Pooled Neon connection, used by the app at runtime.
   DATABASE_URL: z.string().min(1, "DATABASE_URL is not set"),
   // Direct (unpooled) connection, used by drizzle-kit for migrations.
-  DATABASE_URL_UNPOOLED: z.string().min(1).optional(),
+  DATABASE_URL_UNPOOLED: optionalStr,
   // 32 bytes, base64. Encrypts BYOK model keys at rest. Never logged.
   APP_ENCRYPTION_KEY: z
     .string()
@@ -26,8 +35,10 @@ const serverEnvSchema = z.object({
       { message: "APP_ENCRYPTION_KEY must be 32 bytes encoded as base64" },
     ),
   // Local-development fallback only (SPEC section 4). Production uses BYOK.
-  GROQ_API_KEY: z.string().optional(),
-  ANTHROPIC_API_KEY: z.string().optional(),
+  GROQ_API_KEY: optionalStr,
+  ANTHROPIC_API_KEY: optionalStr,
+  // Shared secret for the cron-triggered worker route. Vercel sets this itself.
+  CRON_SECRET: optionalStr,
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

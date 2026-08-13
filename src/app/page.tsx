@@ -13,8 +13,8 @@ export const dynamic = "force-dynamic";
  */
 const PHASES = [
   { n: 0, name: "Scaffold, BYOK, health", state: "done" },
-  { n: 1, name: "Schema and job queue", state: "next" },
-  { n: 2, name: "Ingestion", state: "todo" },
+  { n: 1, name: "Schema and job queue", state: "done" },
+  { n: 2, name: "Ingestion", state: "next" },
   { n: 3, name: "Strategy compiler", state: "todo" },
   { n: 4, name: "Memory viewer, staleness", state: "todo" },
   { n: 5, name: "Community agent, critic, review queue", state: "todo" },
@@ -120,13 +120,12 @@ export default async function Home() {
       <Panel title="Not yet built" hint="listed so the gaps are visible, not hidden">
         <ul className="text-[12px] text-dim space-y-1">
           <li>
-            Memory browser, review queue, job inspector, coverage gaps and the
-            metrics dashboard are unimplemented. They appear in the nav as their
-            phases land.
+            Memory browser, review queue, coverage gaps and the metrics dashboard
+            are unimplemented. They appear in the nav as their phases land.
           </li>
           <li>
             No model call has been made and no metric has been observed. Every
-            number on this page is a count of things in the repo or the database.
+            number on this page is a count of rows in the database.
           </li>
         </ul>
       </Panel>

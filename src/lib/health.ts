@@ -22,7 +22,21 @@ export type HealthReport = {
 };
 
 /** Tables the current phase expects to exist. Grows with each phase. */
-const EXPECTED_TABLES = ["workspaces", "settings"];
+const EXPECTED_TABLES = [
+  "workspaces",
+  "settings",
+  "sources",
+  "memory_records",
+  "record_sources",
+  "research_cache",
+  "jobs",
+  "agent_runs",
+  "artifacts",
+  "artifact_evidence",
+  "reviews",
+  "observations",
+  "coverage_gaps",
+];
 
 async function timed<T>(fn: () => Promise<T>): Promise<[T, number]> {
   const t0 = performance.now();

@@ -18,7 +18,7 @@ Five commitments, each visible in the UI rather than only in the code:
 
 The seed workspace is **ShogunAI** (shogunaios.com).
 
-Build status per phase is in [PROGRESS.md](PROGRESS.md). **Currently at the end of Phase 0.**
+Build status per phase is in [PROGRESS.md](PROGRESS.md). **Currently at the end of Phase 1.**
 
 ---
 
@@ -57,9 +57,10 @@ reports that state explicitly rather than failing silently.
 npm run verify
 ```
 
-Runs the Phase 0 acceptance checks against the real database: environment, connectivity,
-migration state, encryption round trip, and a full encrypt → Postgres → decrypt cycle for a
-throwaway key. Non-destructive — any existing key is restored.
+Runs every phase's acceptance checks against the real database: environment, connectivity,
+migration state, the BYOK encrypt → Postgres → decrypt cycle, and the full job queue contract
+(idempotency, concurrent claim safety, retry with backoff, failure, stale-lock recovery).
+Non-destructive — any existing key is restored and every test job is deleted.
 
 `/api/health` returns the same report as JSON and answers 503 when a check fails.
 
@@ -103,23 +104,53 @@ readable in production. Otherwise generate a fresh one and re-enter the key in `
 ```
 src/
   app/
-    page.tsx              Overview: health, workspace, build progress
-    health/               Health UI
-    api/health/           Health JSON (503 on failure)
-    settings/             BYOK key, provider selection
+    page.tsx           Overview: health, workspace, build progress
+    jobs/              Queue table, enqueue form, worker button, [id] inspector
+    health/            Health UI
+    settings/          BYOK key, provider selection
+    api/health/        Health JSON (503 on failure)
+    api/worker/        Drains the queue; cron target and "run now" target
   components/
-    nav.tsx               Only routes that exist are linked
-    ui.tsx                Panel, Row, Badge, StatusDot, Empty
+    nav.tsx            Only routes that exist are linked
+    ui.tsx             Panel, Row, Badge, StatusDot, Empty
   lib/
-    env.ts                Zod-validated environment, lazy
-    crypto.ts             AES-256-GCM secret envelope
-    db/                   Drizzle client and schema
-    settings.ts           BYOK storage and key resolution
-    workspace.ts          Seed workspace bootstrap
-    health.ts             Health checks
-drizzle/                  Checked-in migrations
-scripts/verify-phase0.ts  Headless acceptance checks
+    env.ts             Zod-validated environment, lazy
+    crypto.ts          AES-256-GCM secret envelope
+    db/                Drizzle client and schema
+    jobs/
+      queue.ts         Enqueue, claim, complete, fail, recover
+      handlers.ts      Job type registry with payload validation
+      worker.ts        Drain loop with job cap and time budget
+    settings.ts        BYOK storage and key resolution
+    workspace.ts       Seed workspace bootstrap
+    health.ts          Health checks
+drizzle/               Checked-in migrations
+scripts/verify.ts      Headless acceptance checks for every phase
 ```
+
+### The queue
+
+A `jobs` table plus a worker route — no third-party queue service (SPEC §5). Two details matter:
+
+**Claiming is a single statement.** The Neon HTTP driver runs each statement in its own implicit
+transaction, so a standalone `SELECT … FOR UPDATE SKIP LOCKED` would drop its lock before the
+follow-up `UPDATE` and two workers could claim the same row. The select is nested inside the
+update:
+
+```sql
+UPDATE jobs SET status = 'running', locked_at = now(), attempts = attempts + 1
+WHERE id = (
+  SELECT id FROM jobs
+  WHERE status = 'queued' AND run_after <= now()
+  ORDER BY run_after, created_at
+  FOR UPDATE SKIP LOCKED LIMIT 1
+) RETURNING *;
+```
+
+**The idempotency index is partial** — `UNIQUE (idempotency_key) WHERE status <> 'failed'`. A
+plain unique index would let a single permanent failure reserve that key forever, so the planner
+could never retry that work. Enqueueing the same key twice while a job is queued, running or done
+still produces exactly one job.
 
 ### Stack
 
