@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { jobs, type Job } from "../db/schema";
 
@@ -39,13 +39,12 @@ export type EnqueueResult = {
 };
 
 /**
- * Idempotent (SPEC section 4). A second call with the same key returns the
- * existing job rather than creating a duplicate.
+ * Idempotent (SPEC section 4). A second call while the first job is still
+ * queued or running returns that job rather than creating a duplicate.
  *
- * The uniqueness constraint is partial — it ignores `failed` rows — so that a
- * permanently failed job does not poison its idempotency key forever and block
- * the planner from ever retrying that work (SPEC 7.4: "never schedule a job
- * whose idempotency key already exists in a non failed state").
+ * Terminal jobs (done, failed) release their key — see the index comment in
+ * schema.ts. Callers that must not repeat completed work should check history
+ * first; the planner does exactly that.
  */
 export async function enqueue(input: EnqueueInput): Promise<EnqueueResult> {
   const db = getDb();
@@ -72,7 +71,7 @@ export async function enqueue(input: EnqueueInput): Promise<EnqueueResult> {
     .where(
       and(
         eq(jobs.idempotencyKey, input.idempotencyKey),
-        ne(jobs.status, "failed"),
+        inArray(jobs.status, ["queued", "running"]),
       ),
     )
     .orderBy(desc(jobs.createdAt))

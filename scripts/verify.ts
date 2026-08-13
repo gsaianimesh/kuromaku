@@ -12,7 +12,8 @@ config({ path: ".env.local", quiet: true });
 
 import { eq, inArray, like, sql } from "drizzle-orm";
 import { getDb } from "../src/lib/db";
-import { jobs, settings } from "../src/lib/db/schema";
+import { jobs, settings, sources } from "../src/lib/db/schema";
+import { crawlSite } from "../src/lib/ingest/crawl";
 import { runHealthChecks } from "../src/lib/health";
 import { getKeyStatus, saveModelKey } from "../src/lib/settings";
 import { getOrCreateDefaultWorkspace } from "../src/lib/workspace";
@@ -298,6 +299,83 @@ async function main() {
     "A job whose worker died is recovered, not stranded",
     recovered >= 1 && afterRecovery.status === "queued",
     `recovered ${recovered} job(s); the stranded job is now ${afterRecovery.status}`,
+  );
+
+  // ---------------------------------------------------------------- Phase 2
+  section("Phase 2 — ingestion");
+
+  const stored = await db
+    .select()
+    .from(sources)
+    .where(eq(sources.workspaceId, ws.id));
+
+  check(
+    "Domain crawled into sources",
+    stored.length > 0,
+    stored.length > 0
+      ? `${stored.length} page(s) stored from ${ws.domain}`
+      : "no sources — run a crawl from /sources first",
+  );
+
+  if (stored.length > 0) {
+    check(
+      "Every source carries a URL, content and a hash",
+      stored.every(
+        (s) => s.url && (s.rawText?.length ?? 0) > 0 && s.contentHash.length === 64,
+      ),
+      `all ${stored.length} rows have url, extracted text and a sha256 hash`,
+    );
+
+    const hashes = new Set(stored.map((s) => s.contentHash));
+    check(
+      "Content hashes are unique per workspace",
+      hashes.size === stored.length,
+      `${hashes.size} distinct hashes across ${stored.length} rows`,
+    );
+
+    // Re-crawl adds nothing: the acceptance check for this phase.
+    const recrawl = await crawlSite({
+      workspaceId: ws.id,
+      domain: ws.domain,
+      maxPages: 30,
+    });
+    const after = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(sources)
+      .where(eq(sources.workspaceId, ws.id));
+    check(
+      "Re-crawling adds nothing",
+      recrawl.stored === 0 && after[0].n === stored.length,
+      `re-crawl stored ${recrawl.stored}, matched ${recrawl.duplicates} unchanged; source count stayed at ${after[0].n}`,
+    );
+    check(
+      "robots.txt was read and respected",
+      !recrawl.robotsStatus.toLowerCase().includes("could not"),
+      recrawl.robotsStatus,
+    );
+  }
+
+  // Idempotency scope: a completed job releases its key so work can re-run.
+  const rerunKey = `${PREFIX}rerun`;
+  await enqueue({
+    workspaceId: ws.id,
+    type: "noop",
+    idempotencyKey: rerunKey,
+    payload: { sleepMs: 0 },
+  });
+  await runWorker({ maxJobs: 5 });
+  const rerun = await enqueue({
+    workspaceId: ws.id,
+    type: "noop",
+    idempotencyKey: rerunKey,
+    payload: { sleepMs: 0 },
+  });
+  check(
+    "A completed job releases its key, so work can be re-run",
+    rerun.created,
+    rerun.created
+      ? "re-enqueued after completion — required for re-crawl and for SPEC 7.2 re-compile"
+      : "a done job still reserves the key, which would make re-compiling impossible",
   );
 
   // Cleanup

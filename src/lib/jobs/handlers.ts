@@ -1,6 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import type { Job } from "../db/schema";
+import { crawlSite, DEFAULT_MAX_PAGES } from "../ingest/crawl";
 
 /**
  * Job type registry. Handlers are looked up by `job.type`; an unregistered type
@@ -81,7 +82,36 @@ const noopHandler: JobHandler<z.infer<typeof noopPayload>> = {
   },
 };
 
-const HANDLERS = new Map<string, RegisteredHandler>([register(noopHandler)]);
+const crawlPayload = z.object({
+  domain: z.string().trim().min(3),
+  maxPages: z.number().int().min(1).max(200).default(DEFAULT_MAX_PAGES),
+});
+
+const crawlHandler: JobHandler<z.infer<typeof crawlPayload>> = {
+  type: "crawl_site",
+  description:
+    "Crawls a domain into sources. Sitemap first, robots-respecting, deduplicated by content hash.",
+  payloadSchema: crawlPayload,
+  async run(payload, ctx) {
+    const summary = await crawlSite({
+      workspaceId: ctx.job.workspaceId,
+      domain: payload.domain,
+      maxPages: payload.maxPages,
+      log: ctx.log,
+    });
+    if (summary.stored === 0 && summary.duplicates === 0) {
+      throw new Error(
+        summary.stoppedEarly ??
+          `Crawl of ${summary.origin} stored nothing and found nothing unchanged. ${summary.skipped.length} url(s) were skipped — see the log.`,
+      );
+    }
+  },
+};
+
+const HANDLERS = new Map<string, RegisteredHandler>([
+  register(noopHandler),
+  register(crawlHandler),
+]);
 
 export function getHandler(type: string): RegisteredHandler | undefined {
   return HANDLERS.get(type);

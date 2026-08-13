@@ -1,7 +1,11 @@
 import { Badge, Empty, Panel, Row } from "@/components/ui";
 import { getKeyStatus, getSettings, SEARCH_PROVIDERS } from "@/lib/settings";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
-import { clearModelKeyAction, setSearchProviderAction } from "./actions";
+import {
+  clearModelKeyAction,
+  setLocalesAction,
+  setSearchProviderAction,
+} from "./actions";
 import { KeyForm } from "./key-form";
 
 export const dynamic = "force-dynamic";
@@ -20,8 +24,24 @@ export default async function SettingsPage() {
         <Row label="Domain" mono>
           {ws.domain}
         </Row>
-        <Row label="Locales" mono>
-          {ws.locales.join(", ")}
+        <Row label="Locales">
+          <form action={setLocalesAction} className="flex items-center gap-2">
+            <input
+              name="locales"
+              defaultValue={ws.locales.join(", ")}
+              spellCheck={false}
+              className="bg-input border border-edge-strong rounded px-2 py-1 text-[12px] font-mono w-40 focus:outline-none focus:border-accent"
+            />
+            <button
+              type="submit"
+              className="text-[11px] text-accent hover:underline"
+            >
+              save
+            </button>
+            <span className="text-[11px] text-dim">
+              voice rules are compiled per locale
+            </span>
+          </form>
         </Row>
         <Row label="Workspace ID" mono>
           <span className="text-dim">{ws.id}</span>

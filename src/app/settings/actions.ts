@@ -11,7 +11,7 @@ import {
   setSearchProvider,
   type ModelProviderId,
 } from "@/lib/settings";
-import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
+import { getOrCreateDefaultWorkspace, setLocales } from "@/lib/workspace";
 
 export type ActionState = {
   ok: boolean;
@@ -82,6 +82,18 @@ export async function clearModelKeyAction(): Promise<void> {
   await clearModelKey(ws.id);
   revalidatePath("/settings");
   revalidatePath("/");
+}
+
+export async function setLocalesAction(formData: FormData): Promise<void> {
+  const raw = String(formData.get("locales") ?? "");
+  const locales = raw
+    .split(/[,\s]+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (locales.length === 0) return;
+  const ws = await getOrCreateDefaultWorkspace();
+  await setLocales(ws.id, locales);
+  revalidatePath("/settings");
 }
 
 export async function setSearchProviderAction(formData: FormData): Promise<void> {

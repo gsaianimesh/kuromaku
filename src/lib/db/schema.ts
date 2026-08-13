@@ -238,13 +238,19 @@ export const jobs = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
   (t) => [
-    // Partial on purpose: a `failed` row no longer reserves its key, so the
-    // planner can retry work that permanently failed instead of that key being
-    // poisoned for the lifetime of the workspace. Enqueueing the same key twice
-    // while a job is queued/running/done still yields exactly one job.
+    // Partial on purpose. The queue's job is to prevent *concurrent* duplicate
+    // execution (SPEC section 2, defect 6), so only queued and running rows
+    // reserve a key. Terminal rows release it, because re-running is a required
+    // behaviour: SPEC 7.2 says re-compiling must supersede rather than
+    // duplicate, and Phase 2 must be able to re-crawl. A key reserved forever
+    // by a `done` row would make both impossible.
+    //
+    // Not scheduling *redundant* work ("this was already done recently") is a
+    // planning decision, and lives in the planner (SPEC 7.4) where it has the
+    // history and observations needed to judge it.
     uniqueIndex("jobs_idempotency_key_uq")
       .on(t.idempotencyKey)
-      .where(sql`status <> 'failed'`),
+      .where(sql`status in ('queued', 'running')`),
     // Supports the claim query's WHERE status/runAfter + ORDER BY createdAt.
     index("jobs_claim_idx").on(t.status, t.runAfter, t.createdAt),
     index("jobs_workspace_idx").on(t.workspaceId, t.createdAt),

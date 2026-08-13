@@ -12,7 +12,10 @@ import { settings, workspaces, type Workspace } from "./db/schema";
 export const SEED_WORKSPACE = {
   name: "ShogunAI",
   domain: "shogunaios.com",
-  locales: ["en"],
+  // The site serves /en and /ja. Both are declared so the compiler generates
+  // voice rules per locale rather than silently treating the site as English
+  // only (SPEC 7.2).
+  locales: ["en", "ja"],
 } as const;
 
 /** Idempotent: returns the existing workspace, or creates the seed one. */
@@ -38,6 +41,21 @@ export async function getOrCreateDefaultWorkspace(): Promise<Workspace> {
     .onConflictDoNothing();
 
   return created;
+}
+
+export async function setLocales(
+  workspaceId: string,
+  locales: string[],
+): Promise<void> {
+  const db = getDb();
+  const cleaned = [
+    ...new Set(locales.map((l) => l.trim().toLowerCase()).filter(Boolean)),
+  ];
+  if (cleaned.length === 0) throw new Error("A workspace needs at least one locale");
+  await db
+    .update(workspaces)
+    .set({ locales: cleaned })
+    .where(eq(workspaces.id, workspaceId));
 }
 
 export async function getWorkspace(id: string): Promise<Workspace | null> {
