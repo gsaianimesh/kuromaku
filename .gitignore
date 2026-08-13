@@ -42,3 +42,6 @@ yarn-error.log*
 next-env.d.ts
 e2e-output.txt
 verify-out.txt
+
+# stray scratch scripts
+*.mts
