@@ -1,7 +1,7 @@
 import "server-only";
 import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { jobs, type Job } from "../db/schema";
+import { agentRuns, jobs, type Job } from "../db/schema";
 
 /**
  * Postgres-backed queue (SPEC section 5). No third-party queue service.
@@ -222,4 +222,17 @@ export async function countByStatus(
     .where(eq(jobs.workspaceId, workspaceId))
     .groupBy(jobs.status);
   return Object.fromEntries(rows.map((r) => [r.status, r.n]));
+}
+
+/**
+ * Model calls made by a job (SPEC section 4: every call is logged and viewable).
+ * Ordered oldest first so the inspector reads as the sequence the job ran.
+ */
+export async function runsForJob(jobId: string) {
+  const db = getDb();
+  return db
+    .select()
+    .from(agentRuns)
+    .where(eq(agentRuns.jobId, jobId))
+    .orderBy(agentRuns.createdAt);
 }

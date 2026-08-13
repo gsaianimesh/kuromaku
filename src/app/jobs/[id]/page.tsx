@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Empty, Panel, Row } from "@/components/ui";
-import { getJob } from "@/lib/jobs/queue";
+import { getJob, runsForJob } from "@/lib/jobs/queue";
 import { getHandler } from "@/lib/jobs/handlers";
 import { STATUS_TONE } from "../page";
 
@@ -20,6 +20,19 @@ export default async function JobDetail({
   if (!job) notFound();
 
   const handler = getHandler(job.type);
+  const runs = await runsForJob(job.id);
+
+  const totalTokens = runs.reduce(
+    (sum, r) => sum + (r.inputTokens ?? 0) + (r.outputTokens ?? 0),
+    0,
+  );
+  // Null rather than 0 when nothing is priced — a $0.00 total would claim the
+  // calls were free rather than that their model has no price entry.
+  const priced = runs.filter((r) => r.costUsd !== null);
+  const totalCost =
+    priced.length === 0
+      ? null
+      : priced.reduce((sum, r) => sum + Number(r.costUsd), 0);
 
   return (
     <div className="max-w-3xl mx-auto p-4 space-y-3">
@@ -103,11 +116,92 @@ export default async function JobDetail({
         </Panel>
       )}
 
-      <Panel title="Model calls" hint="prompt, tokens, cost">
-        <Empty>
-          No model calls. This job type does not call a model — agent runs are
-          recorded here from Phase 3 onward.
-        </Empty>
+      <Panel
+        title="Model calls"
+        hint={
+          runs.length > 0
+            ? `${runs.length} call(s) · ${totalTokens.toLocaleString()} tokens · ${
+                totalCost === null ? "unpriced" : `$${totalCost.toFixed(4)}`
+              }`
+            : undefined
+        }
+      >
+        {runs.length === 0 ? (
+          <Empty>
+            No model calls. This job type does not call a model.
+          </Empty>
+        ) : (
+          <ol className="space-y-3">
+            {runs.map((r) => {
+              const meta = r.toolCalls as {
+                task?: string;
+                stopReason?: string;
+                failed?: boolean;
+              } | null;
+              return (
+                <li key={r.id} className="border border-edge rounded bg-input p-2.5">
+                  <div className="flex items-center gap-2 flex-wrap mb-2">
+                    <Badge tone={meta?.failed ? "bad" : "idle"}>{r.agentId}</Badge>
+                    <span className="font-mono text-[11px] text-accent">{r.model}</span>
+                    {meta?.task && <Badge>{meta.task}</Badge>}
+                    <span className="text-[11px] text-dim font-mono ml-auto">
+                      {r.createdAt.toISOString().slice(11, 19)}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+                    <div>
+                      <p className="text-[10px] text-dim uppercase">Input</p>
+                      <p className="text-[12px] font-mono">
+                        {r.inputTokens?.toLocaleString() ?? "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-dim uppercase">Output</p>
+                      <p className="text-[12px] font-mono">
+                        {r.outputTokens?.toLocaleString() ?? "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-dim uppercase">Cost</p>
+                      <p className="text-[12px] font-mono">
+                        {r.costUsd === null ? (
+                          <span className="text-warn">unpriced</span>
+                        ) : (
+                          `$${Number(r.costUsd).toFixed(6)}`
+                        )}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-dim uppercase">Duration</p>
+                      <p className="text-[12px] font-mono">
+                        {r.durationMs !== null ? `${r.durationMs}ms` : "—"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <details className="group">
+                    <summary className="text-[11px] text-accent cursor-pointer hover:underline">
+                      prompt ({(r.prompt?.length ?? 0).toLocaleString()} chars)
+                    </summary>
+                    <pre className="text-[10px] font-mono text-dim whitespace-pre-wrap break-words max-h-64 overflow-y-auto mt-1.5 pl-2 border-l border-edge">
+                      {r.prompt}
+                    </pre>
+                  </details>
+
+                  <details className="group mt-1">
+                    <summary className="text-[11px] text-accent cursor-pointer hover:underline">
+                      raw output ({(r.rawOutput?.length ?? 0).toLocaleString()} chars)
+                    </summary>
+                    <pre className="text-[10px] font-mono text-muted whitespace-pre-wrap break-words max-h-64 overflow-y-auto mt-1.5 pl-2 border-l border-edge">
+                      {r.rawOutput}
+                    </pre>
+                  </details>
+                </li>
+              );
+            })}
+          </ol>
+        )}
       </Panel>
     </div>
   );

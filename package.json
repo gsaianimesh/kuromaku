@@ -13,7 +13,8 @@
     "db:studio": "drizzle-kit studio",
     "verify": "node --conditions=react-server --import tsx scripts/verify.ts",
     "e2e": "node --conditions=react-server --import tsx scripts/e2e.ts",
-    "eval": "node --conditions=react-server --import tsx scripts/eval.ts"
+    "eval": "node --conditions=react-server --import tsx scripts/eval.ts",
+    "screenshots": "node --conditions=react-server --import tsx scripts/screenshots.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
@@ -36,6 +37,7 @@
     "drizzle-kit": "^0.31.10",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
+    "playwright": "^1.62.1",
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
     "typescript": "^5"
