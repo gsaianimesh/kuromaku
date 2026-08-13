@@ -25,7 +25,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <span className="font-mono text-[13px] font-semibold tracking-tight">
               kuromaku
             </span>
-            <span className="text-dim text-[11px] font-mono">v0 · phase 1</span>
+            <span className="text-dim text-[11px] font-mono">v0</span>
           </Link>
           <Nav />
         </header>

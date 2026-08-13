@@ -54,12 +54,26 @@ export async function getSettings(workspaceId: string): Promise<Settings> {
  */
 export type KeyStatus =
   | { state: "none" }
+  /** No stored key, but a development env var is filling in (SPEC section 4). */
+  | { state: "env"; variable: string }
   | { state: "stored"; masked: string; updatedAt: Date }
   | { state: "undecryptable"; updatedAt: Date };
 
 export async function getKeyStatus(workspaceId: string): Promise<KeyStatus> {
   const row = await getSettings(workspaceId);
-  if (!row?.encryptedModelKey) return { state: "none" };
+  if (!row?.encryptedModelKey) {
+    // Saying "not set" while an env fallback is quietly doing the work would be
+    // the same class of dishonesty this system exists to avoid.
+    const provider = (row?.modelProvider ?? "groq") as ModelProviderId;
+    const variable =
+      MODEL_PROVIDERS.find((p) => p.id === provider)?.envFallback ?? "GROQ_API_KEY";
+    try {
+      if (getEnv()[variable]) return { state: "env", variable };
+    } catch {
+      // Environment is invalid; /health reports that separately.
+    }
+    return { state: "none" };
+  }
   try {
     const plain = decryptSecret(row.encryptedModelKey);
     return {

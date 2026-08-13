@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { Badge, Panel, Row, StatusDot, type StatusTone } from "@/components/ui";
 import { runHealthChecks } from "@/lib/health";
+import { memoryStats } from "@/lib/memory";
+import { listCoverageGaps } from "@/lib/planner";
+import { observationSummary } from "@/lib/publish";
+import { listArtifacts } from "@/lib/review";
 import { getKeyStatus } from "@/lib/settings";
+import { sourceStats } from "@/lib/sources";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
@@ -11,25 +16,34 @@ export const dynamic = "force-dynamic";
  * each phase lands. Nothing here is a measured metric — the metrics dashboard
  * arrives in Phase 5 and will show empty states until observations exist.
  */
-const PHASES = [
+const PHASES: Array<{ n: number; name: string; state: "done" | "next" | "todo" }> = [
   { n: 0, name: "Scaffold, BYOK, health", state: "done" },
   { n: 1, name: "Schema and job queue", state: "done" },
-  { n: 2, name: "Ingestion", state: "next" },
-  { n: 3, name: "Strategy compiler", state: "todo" },
-  { n: 4, name: "Memory viewer, staleness", state: "todo" },
-  { n: 5, name: "Community agent, critic, review queue", state: "todo" },
-  { n: 6, name: "Planner and coverage gaps", state: "todo" },
-  { n: 7, name: "Publishing and performance", state: "todo" },
-  { n: 8, name: "Content agent, REST, MCP", state: "todo" },
-  { n: 9, name: "Demo and docs", state: "todo" },
-] as const;
+  { n: 2, name: "Ingestion", state: "done" },
+  { n: 3, name: "Strategy compiler", state: "done" },
+  { n: 4, name: "Memory viewer, staleness", state: "done" },
+  { n: 5, name: "Community agent, critic, review queue", state: "done" },
+  { n: 6, name: "Planner and coverage gaps", state: "done" },
+  { n: 7, name: "Publishing and performance", state: "done" },
+  { n: 8, name: "Content agent, REST, MCP", state: "done" },
+  { n: 9, name: "Demo and docs", state: "done" },
+];
 
 export default async function Home() {
   const ws = await getOrCreateDefaultWorkspace();
-  const [health, key] = await Promise.all([
+  const [health, key, mem, srcStats, gaps, artifactRows, obs] = await Promise.all([
     runHealthChecks(),
     getKeyStatus(ws.id),
+    memoryStats(ws.id),
+    sourceStats(ws.id),
+    listCoverageGaps(ws.id),
+    listArtifacts(ws.id),
+    observationSummary(ws.id),
   ]);
+
+  const openGaps = gaps.filter((g) => g.status === "open").length;
+  const artifactCount = artifactRows.length;
+  const obsTotal = obs.total;
 
   const healthTone: StatusTone =
     health.status === "pass" ? "ok" : health.status === "warn" ? "warn" : "bad";
@@ -74,6 +88,12 @@ export default async function Home() {
                 <Badge tone="ok">stored</Badge>
                 <span className="font-mono text-dim">{key.masked}</span>
               </span>
+            ) : key.state === "env" ? (
+              <span className="flex items-center gap-2 flex-wrap">
+                <Badge tone="warn">env fallback</Badge>
+                <span className="text-dim font-mono">{key.variable}</span>
+                <span className="text-dim">development only</span>
+              </span>
             ) : key.state === "undecryptable" ? (
               <Badge tone="bad">undecryptable</Badge>
             ) : (
@@ -117,17 +137,53 @@ export default async function Home() {
         </Panel>
       </div>
 
-      <Panel title="Not yet built" hint="listed so the gaps are visible, not hidden">
-        <ul className="text-[12px] text-dim space-y-1">
-          <li>
-            Memory browser, review queue, coverage gaps and the metrics dashboard
-            are unimplemented. They appear in the nav as their phases land.
-          </li>
-          <li>
-            No model call has been made and no metric has been observed. Every
-            number on this page is a count of rows in the database.
-          </li>
-        </ul>
+      <Panel
+        title="Workspace state"
+        hint="counts of rows, not projections — nothing here is estimated"
+      >
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Link href="/sources" className="block group">
+            <p className="text-[11px] text-dim uppercase tracking-wide">Sources</p>
+            <p className="text-[18px] font-mono group-hover:text-accent">
+              {srcStats.count}
+            </p>
+          </Link>
+          <Link href="/memory" className="block group">
+            <p className="text-[11px] text-dim uppercase tracking-wide">
+              Memory records
+            </p>
+            <p className="text-[18px] font-mono group-hover:text-accent">
+              {mem.total}
+            </p>
+            {mem.unsourced > 0 && (
+              <p className="text-[11px] text-bad">{mem.unsourced} unsourced</p>
+            )}
+          </Link>
+          <Link href="/review" className="block group">
+            <p className="text-[11px] text-dim uppercase tracking-wide">Artifacts</p>
+            <p className="text-[18px] font-mono group-hover:text-accent">
+              {artifactCount}
+            </p>
+          </Link>
+          <Link href="/planner" className="block group">
+            <p className="text-[11px] text-dim uppercase tracking-wide">
+              Coverage gaps
+            </p>
+            <p
+              className={`text-[18px] font-mono group-hover:text-accent ${openGaps > 0 ? "text-bad" : ""}`}
+            >
+              {openGaps}
+            </p>
+          </Link>
+        </div>
+
+        {obsTotal === 0 && (
+          <p className="text-[11px] text-dim mt-3 pt-3 border-t border-edge/60">
+            No performance has been observed yet, so the metrics dashboard is
+            deliberately blank rather than showing zeros. A zero would claim
+            something was measured and found to be nothing.
+          </p>
+        )}
       </Panel>
     </div>
   );
