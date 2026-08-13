@@ -186,11 +186,21 @@ export async function runModelJson<T>(
     const response = await runModel({ ...input, messages, jsonMode: true });
     lastRaw = response.text;
 
+    /*
+     * A response cut off at max_tokens is not a JSON problem, it is a length
+     * problem, and telling the model "that was not valid JSON" makes it try the
+     * same too-long answer again. Naming the real cause gets a shorter one.
+     */
+    const truncated =
+      response.stopReason === "length" || response.stopReason === "max_tokens";
+
     let parsed: unknown;
     try {
       parsed = JSON.parse(extractJson(response.text));
     } catch (e) {
-      lastProblem = `not valid JSON (${e instanceof Error ? e.message : "parse error"})`;
+      lastProblem = truncated
+        ? `the response was cut off at the ${input.maxTokens ?? 8000} token limit, so the JSON is incomplete. Return fewer records and keep every snippet under 150 characters.`
+        : `not valid JSON (${e instanceof Error ? e.message : "parse error"})`;
       continue;
     }
 

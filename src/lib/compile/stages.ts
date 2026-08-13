@@ -142,7 +142,7 @@ export const emittedRecord = z.preprocess(normaliseEnvelope, z.object({
   /** URLs from the search results given in the prompt. */
   sourceUrls: listOf(z.string()).default([]),
   /** Verbatim supporting text, shown next to the fact in the memory viewer. */
-  snippet: z.string().max(600).optional(),
+  snippet: z.string().max(300).optional(),
 }));
 
 export type EmittedRecord = z.infer<typeof emittedRecord>;
@@ -197,8 +197,13 @@ Rules that matter more than completeness:
   arrays empty. Do not invent a source. Do not silently drop the record.
 - "confidence" is your honest read: 0.9+ when the material states it plainly,
   0.6-0.8 when it is a fair reading, below 0.5 when it is inference.
-- "snippet" must be text that actually appears in the cited source.
+- "snippet" must be text that actually appears in the cited source, and must
+  be under 150 characters. Long snippets are the main cause of a response being
+  cut off mid-JSON.
 - Never invent metrics, customer counts, funding, or performance numbers.
+
+Emit at most 8 records unless the stage says otherwise. Keep every string tight;
+a truncated response is worse than a short one.
 
 Return a single JSON object: {"records": [...]}.
 `.trim();

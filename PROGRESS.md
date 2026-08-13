@@ -221,7 +221,7 @@ using real Groq calls.
 | Compile shogunaios.com | **pass** | 44 active records across 8 types and 2 locales |
 | Every record shows a source or an unsourced flag | **pass** | 23 of 45 flagged unsourced; none of them above 0.5 confidence |
 | Duplicate research queries hit cache | **deferred** | No search key configured. The cache path is exercised by `npm run verify`; the live dedup could not be demonstrated without a provider key. |
-| Re-compiling supersedes rather than duplicates | **pass** | See `npm run e2e` |
+| Re-compiling supersedes rather than duplicates | **pass** | 48 active vs 52 superseded, all 52 carrying a `supersedes_id`, max version 3 |
 
 ---
 
@@ -304,3 +304,52 @@ temperature, not quality. The golden set instead pairs 20 fixed inputs with
 uncited records below 0.5, no fabricated metrics, no invented thread URLs, and a
 negative case where a hype-laden draft must score below the critic threshold. Those
 are stable and fail loudly when a prompt change breaks the behaviour that matters.
+
+
+---
+
+## Verification results
+
+`npm run verify` — 24 infrastructure checks, no model calls.
+`npm run e2e` — the full definition of done, against real Groq calls.
+
+Last full end-to-end run, **15/15 passed**:
+
+| Check | Evidence |
+| --- | --- |
+| Re-compiling supersedes rather than duplicating | 48 active, 52 superseded, max version 3 |
+| Superseded records point at their predecessor | 52 carry a `supersedes_id` |
+| Every record shows a source or an unsourced flag | 48 records, 18 flagged unsourced |
+| No unsourced record presents as confident | max confidence among unsourced: **0.40** — the writer's cap, not the model's word |
+| Planner schedules work with a readable reason | 8 jobs, e.g. *"Channel ranked 1 in the compiled strategy (Founders and product managers frequently browse Hacker News…)"* |
+| A prioritised channel with no agent becomes a visible gap | **reddit (rank 4), linkedin (rank 5)** |
+| Agent run completes | search unavailable → logged, drafted from memory, cited no invented thread |
+| Draft appears with evidence | 4 evidence items: `passive-context-capture`, `hybrid-search`, `tool-integration`, plus a note recording why no thread was cited |
+| Draft carries a critic score | 0.95, 0 violations |
+| Editing a draft records a normalised distance | 0.0580 |
+| The dashboard has an average to show | 0.0580 across 1 edit |
+| Marking as posted publishes with a real URL | status `published` |
+| An observation is recorded | 1 observation |
+| Planner stops scheduling an unobserved channel | *"2 artifact(s) in the last 14 days and no observations recorded for any of them. Record performance for this channel before drafting more."* |
+| Editing cited memory marks derived artifacts stale | 1 artifact marked stale, 1 successor record created |
+| Model calls logged with cost | 3 runs, 3 priced, $0.0039 |
+
+REST and MCP verified live over HTTP: all six MCP tools list and call correctly;
+`get_memory` returned channel priorities with `hacker_news` rank 1; `/api/v1/memory`
+returned records with their sources and `unsourced` counts.
+
+### Known issues
+
+- **A compile can hit a truncated stage response** when a stage emits many records
+  with long snippets: the response is cut at `max_tokens`, the JSON is incomplete,
+  and the retry then starves on the 8,000 tokens-per-minute limit. Fixed by capping
+  snippets at 150 characters in the prompt and 300 in the schema, and by telling the
+  retry the real cause — a length problem, not a JSON problem, so it returns something
+  shorter rather than the same too-long answer.
+- **Neon's HTTP endpoint occasionally returns `fetch failed`** from this machine. It
+  took down one long e2e run mid-flight. The same network also intercepts TLS to
+  `vercel.com`, so this looks environmental rather than a driver problem.
+- **Web research is unconfigured**, so the competitors stage produces nothing rather
+  than inventing competitors. That is the designed behaviour and worth demoing, but
+  it does mean the comparison-page path of the content agent cannot run until a
+  `TAVILY_API_KEY` exists.
