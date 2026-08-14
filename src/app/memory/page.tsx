@@ -170,7 +170,13 @@ export default async function MemoryPage() {
           </p>
         )}
         <CompileControls sourceCount={srcStats.count} />
-        {!search.configured && (
+        {/*
+          Only when a compile could actually happen. On the demo instance
+          compiling is refused anyway, and stacking a second amber block about
+          a provider that will never be called reads as a second thing being
+          wrong rather than one thing being deliberately off.
+        */}
+        {!search.configured && !DEMO_MODE && (
           <p className="text-[11px] text-warn mt-2.5 pt-2.5 border-t border-edge/60">
             Web research is unavailable: no {search.envVar} is set, so the{" "}
             {search.provider} provider cannot be called. The competitors stage
