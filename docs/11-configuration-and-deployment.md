@@ -129,14 +129,20 @@ const url = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
 
 ## Deployment
 
-Target is Vercel. `vercel.json` is checked in:
+Target is Vercel. `vercel.json` carries nothing but the schema:
 
 ```json
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "crons": [{ "path": "/api/worker", "schedule": "*/5 * * * *" }]
+  "$schema": "https://openapi.vercel.sh/vercel.json"
 }
 ```
+
+It used to declare a five-minute cron on `/api/worker`. **That fails the
+deployment on the Hobby plan**, which allows only daily crons — the build is
+rejected rather than the schedule being downgraded, so the symptom is a project
+that will not deploy at all rather than a queue that drains slowly. The schedule
+now lives in [`.github/workflows/worker.yml`](../.github/workflows/worker.yml),
+runs every fifteen minutes, and costs nothing.
 
 ```bash
 npx vercel link
@@ -144,8 +150,28 @@ npx vercel env add DATABASE_URL production
 npx vercel env add DATABASE_URL_UNPOOLED production
 npx vercel env add APP_ENCRYPTION_KEY production
 npx vercel env add CRON_SECRET production
+npx vercel env add DEMO_MODE production      # set to 1 on any public deployment
 npx vercel --prod
 ```
+
+Then add two repository secrets under Settings → Secrets and variables →
+Actions, or the workflow will fail on its first run:
+
+| secret | value |
+|---|---|
+| `WORKER_URL` | `https://<deployment>/api/worker` |
+| `CRON_SECRET` | the same value given to Vercel above |
+
+### What a public deployment needs
+
+`DEMO_MODE=1`. There is no authentication (see
+[12 — Security](12-security.md#demo-mode)), so without it anyone who finds the
+URL can trigger a compile against the owner's model credits and overwrite the
+stored key from `/settings`.
+
+With it set, **no model key is required on the deployment at all** — every path
+that could spend one is refused, so `GROQ_API_KEY` and `TAVILY_API_KEY` can be
+left unset. `/health` reports which mode the instance is in.
 
 Use the same `APP_ENCRYPTION_KEY` as local if locally-stored BYOK keys should
 remain readable in production. Otherwise generate a fresh one and re-enter the

@@ -77,7 +77,7 @@ These are enforced, not merely unbuilt.
 
 **It does not display an unmeasured number.** Where nothing was observed the interface says so in words. A model with no entry in the pricing table produces a null cost that renders as "unpriced", never as $0.00.
 
-**It does not authenticate users.** Version one is single tenant with no login. Every table carries a workspace id, so multi tenancy is a routing change rather than a migration, but no such routing exists. The public demo compensates with a refusal list, not a login: `DEMO_MODE=1` blocks compiling, crawling, draining the queue and writing a model key. That is a stopgap for one deployment, not a security model, and section 6 says so.
+**It does not authenticate users.** Version one is single tenant with no login. Every table carries a workspace id, so multi tenancy is a routing change rather than a migration, but no such routing exists. The public demo compensates with a refusal list, not a login: `DEMO_MODE=1` blocks compiling, crawling, writing a model key, and draining the queue by either route. That is a stopgap for one deployment, not a security model, and section 6 says so.
 
 ## 2. What it was built against
 
@@ -548,7 +548,7 @@ Verification is only worth describing if it found something.
 
 **No pagination anywhere,** in the interface or the API. Lists are capped and a workspace exceeding those caps silently sees a truncated view.
 
-**No authentication at all.** Every control described in this document assumes a trusted operator. The public demo instance runs with `DEMO_MODE=1`, which refuses the four actions that spend money or touch credentials — compiling, crawling, draining the queue, and writing a model key. Everything else, including editing memory and approving drafts, is open to anyone who finds the URL, because being checkable is the point of that instance. This is a refusal list, not authentication: it protects the owner's wallet and key, not the data, and any deployment holding something worth protecting needs the real thing.
+**No authentication at all.** Every control described in this document assumes a trusted operator. The public demo instance runs with `DEMO_MODE=1`, which refuses the actions that spend money or touch credentials — compiling, crawling, writing a model key, and draining the queue from the button or the scheduled worker alike. The planner stays open because it costs nothing, which is precisely why the scheduled worker had to be gated too: the planner enqueues agent jobs, and a schedule that drained them would have walked straight through the gate. Everything else, including editing memory and approving drafts, is open to anyone who finds the URL, because being checkable is the point of that instance. This is a refusal list, not authentication: it protects the owner's wallet and key, not the data, and any deployment holding something worth protecting needs the real thing.
 
 **No unit tests, no UI tests, no CI, nothing hermetic.** The three scripts all require a live database, and two require a live model provider. The cost was concrete and is described in section 5.
 

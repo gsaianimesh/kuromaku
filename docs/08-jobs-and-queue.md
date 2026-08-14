@@ -293,10 +293,12 @@ With `CRON_SECRET` unset the route is open. That is acceptable locally — it
 drains a queue only this app fills — and unacceptable in production. See
 [12 — Security](12-security.md).
 
-`vercel.json` registers the cron:
+The schedule lives in `.github/workflows/worker.yml`:
 
 ```json
-{ "crons": [{ "path": "/api/worker", "schedule": "*/5 * * * *" }] }
+on:
+  schedule:
+    - cron: "*/15 * * * *"
 ```
 
 Vercel supplies the bearer token automatically.

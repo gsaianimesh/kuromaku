@@ -22,6 +22,15 @@ owner's credentials:
 | `runWorkerAction` | draining the queue runs whatever is in it, compiles included |
 | `runCrawlNowAction` | drains the queue, and fetches a third-party site |
 | `saveModelKeyAction`, `clearModelKeyAction` | an anonymous visitor must not replace or delete a stored BYOK key |
+| `POST /api/worker` | the scheduled drain would otherwise execute whatever a visitor enqueued |
+
+That last row is the one that is easy to miss. `runPlannerAction` stays open —
+it costs nothing and its output is the point of the walkthrough — but it
+*enqueues* `run_agent` jobs. Gating the manual worker button while leaving the
+scheduled worker running would have been a gate with a hole in it: the queue
+would drain every fifteen minutes on the owner's account. The route answers 200
+with a `refused` body rather than 403, because a refusal is the correct outcome
+for that caller and not something to alert on.
 
 Everything else stays open. Reading memory, following provenance, editing a
 record and watching what goes stale, approving a draft — those are the claims

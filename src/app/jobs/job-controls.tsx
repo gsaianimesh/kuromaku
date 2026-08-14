@@ -138,7 +138,7 @@ export function RunWorkerButton() {
           {pending ? "Draining…" : "Run worker now"}
         </button>
         <span className="text-[11px] text-dim">
-          Also runs every 5 minutes via Vercel cron.
+          Also runs on a schedule from GitHub Actions.
         </span>
       </div>
 

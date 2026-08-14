@@ -1,0 +1,77 @@
+name: worker
+
+# Drains the job queue on a schedule.
+#
+# This lived in vercel.json as a five-minute cron. Vercel's Hobby plan allows
+# only daily crons, and a deployment carrying a more frequent one is rejected
+# outright — so the schedule moved here, where it is free, and the deployment
+# went through. Nothing about the worker itself changed: this is an HTTP POST
+# to the same route the "run now" button calls.
+#
+# Requires two repository secrets (Settings → Secrets and variables → Actions):
+#   WORKER_URL    https://<your-deployment>/api/worker
+#   CRON_SECRET   the same value as the CRON_SECRET environment variable in Vercel
+#
+# Without CRON_SECRET the route is open, which is fine locally and is not fine
+# for a public deployment: anything that can reach it can drain the queue.
+
+on:
+  schedule:
+    # Every 15 minutes. GitHub's scheduler is best-effort and runs late under
+    # load, so this is a floor rather than a guarantee — fine for a queue whose
+    # jobs are idempotent and whose worst case is running a little later.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      maxJobs:
+        description: "How many jobs to claim in this run"
+        required: false
+        default: "10"
+
+# One drain at a time. Overlapping runs would claim different rows rather than
+# duplicate work — the queue uses FOR UPDATE SKIP LOCKED — but there is no
+# reason to pay for two.
+concurrency:
+  group: worker
+  cancel-in-progress: false
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Drain the queue
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MAX_JOBS: ${{ github.event.inputs.maxJobs || '10' }}
+        run: |
+          if [ -z "$WORKER_URL" ]; then
+            echo "WORKER_URL is not set. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+          # --max-time guards against a hung deployment holding the runner open.
+          # -w writes the status code on its own line after the body.
+          response=$(curl -sS -X POST \
+            --max-time 120 \
+            -H "authorization: Bearer ${CRON_SECRET}" \
+            -w '\n%{http_code}' \
+            "${WORKER_URL}?maxJobs=${MAX_JOBS}")
+
+          status=$(printf '%s' "$response" | tail -n 1)
+          body=$(printf '%s' "$response" | sed '$d')
+
+          echo "$body"
+          echo "status: $status"
+
+          # A 401 means the secret is wrong, which otherwise looks like a queue
+          # that is simply always empty.
+          if [ "$status" = "401" ]; then
+            echo "Unauthorised — CRON_SECRET here does not match the one in the deployment."
+            exit 1
+          fi
+          if [ "$status" != "200" ]; then
+            echo "Worker returned $status."
+            exit 1
+          fi
