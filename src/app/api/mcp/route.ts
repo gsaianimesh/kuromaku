@@ -33,7 +33,7 @@ const TOOLS = [
   {
     name: "get_memory",
     description:
-      "Read the workspace's active marketing memory. Every record carries its sources and an `unsourced` flag; a record with no sources is an unverified inference, not a fact.",
+      "Read the workspace's active marketing memory. Every record carries its sources and a `grounding` value: `sourced` means a crawled page or search result backs it, `derived` means it was compiled from other records and names them in `derivedFrom`, and `ungrounded` means nothing in the system accounts for it — treat those as unverified inferences, not facts.",
     inputSchema: {
       type: "object",
       properties: {
@@ -143,6 +143,8 @@ async function callTool(name: string, args: Record<string, unknown>) {
       });
       return textResult({
         count: records.length,
+        sourced: records.filter((r) => r.grounding === "sourced").length,
+        derived: records.filter((r) => r.grounding === "derived").length,
         unsourced: records.filter((r) => r.unsourced).length,
         records,
       });

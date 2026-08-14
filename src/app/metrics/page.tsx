@@ -91,6 +91,14 @@ export default async function MetricsPage() {
           <Row label="Active records" mono>
             {memory.total}
           </Row>
+          <Row label="Sourced" mono>
+            <span className="text-ok">
+              {memory.sourced} ({((memory.sourced / memory.total) * 100).toFixed(0)}%)
+            </span>
+          </Row>
+          <Row label="Derived" mono>
+            {memory.derived} ({((memory.derived / memory.total) * 100).toFixed(0)}%)
+          </Row>
           <Row label="Unsourced">
             {memory.unsourced === 0 ? (
               <span className="text-ok">none</span>

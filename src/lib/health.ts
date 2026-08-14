@@ -1,4 +1,5 @@
 import "server-only";
+import { DEMO_MODE } from "./demo";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { checkEnv } from "./env";
@@ -193,6 +194,21 @@ export async function runHealthChecks(): Promise<HealthReport> {
     : checks.some((c) => c.status === "warn")
       ? "warn"
       : "pass";
+
+  /*
+   * Informational, never a failure. A reader following the live URL from the
+   * submission document should be able to see for themselves that this instance
+   * refuses to spend the owner's model credits, rather than taking the
+   * document's word for it.
+   */
+  checks.push({
+    id: "demo-mode",
+    label: "Demo mode",
+    status: "pass",
+    detail: DEMO_MODE
+      ? "on — compile, crawl, worker drain and model-key writes are refused"
+      : "off — every action is enabled, so this instance must not be public",
+  });
 
   return { status, checkedAt: new Date().toISOString(), checks };
 }

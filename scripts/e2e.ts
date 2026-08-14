@@ -11,9 +11,10 @@
 import { config } from "dotenv";
 config({ path: ".env.local", quiet: true });
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../src/lib/db";
 import {
+  artifactEvidence,
   artifacts,
   coverageGaps,
   jobs,
@@ -110,14 +111,38 @@ async function main() {
 
   const memory = await listActiveMemory(ws.id);
   check(
-    "Every record shows a source or an unsourced flag",
-    memory.every((r) => r.sources.length > 0 || r.unsourced),
-    `${memory.length} record(s); ${memory.filter((r) => r.unsourced).length} flagged unsourced`,
+    "Every record accounts for itself: a source, a parent, or a warning",
+    memory.every(
+      (r) =>
+        (r.grounding === "sourced" && r.sources.length > 0) ||
+        (r.grounding === "derived" && r.derivedFrom.length > 0) ||
+        (r.grounding === "ungrounded" && r.unsourced),
+    ),
+    `${memory.length} record(s): ${memory.filter((r) => r.grounding === "sourced").length} sourced, ` +
+      `${memory.filter((r) => r.grounding === "derived").length} derived, ` +
+      `${memory.filter((r) => r.unsourced).length} ungrounded`,
   );
   check(
-    "No unsourced record presents as confident",
+    "No ungrounded record presents as confident",
     memory.filter((r) => r.unsourced).every((r) => r.confidence < 0.5),
-    `max confidence among unsourced: ${Math.max(0, ...memory.filter((r) => r.unsourced).map((r) => r.confidence)).toFixed(2)}`,
+    `max confidence among ungrounded: ${Math.max(0, ...memory.filter((r) => r.unsourced).map((r) => r.confidence)).toFixed(2)}`,
+  );
+  check(
+    "No derived record is more confident than what it rests on",
+    (() => {
+      const byId = new Map(memory.map((r) => [r.id, r]));
+      return memory
+        .filter((r) => r.grounding === "derived")
+        .every((r) => {
+          // Parents that have themselves been superseded are not in the active
+          // set; the rule was applied against their value at write time.
+          const known = r.derivedFrom
+            .map((p) => byId.get(p.id)?.confidence)
+            .filter((c): c is number => typeof c === "number");
+          return known.length === 0 || r.confidence <= Math.min(...known) + 1e-6;
+        });
+    })(),
+    `${memory.filter((r) => r.grounding === "derived").length} derived record(s) checked against their parents`,
   );
 
   // ------------------------------------------------------------- planner
@@ -237,29 +262,48 @@ async function main() {
     // --------------------------------------- planner reacts to observations
     section("Phase 7 — the plan changes because of what was observed");
 
-    // Two artifacts in a channel with no observations must stop that channel
-    // being scheduled again. Build that condition and confirm the planner sees it.
+    /*
+     * Two artifacts in a channel with no observations must stop that channel
+     * being scheduled again. Build that condition and confirm the planner sees
+     * it — then take it back down.
+     *
+     * These fixtures go in through the same invariant real drafts obey: every
+     * artifact carries evidence. Inserting them bare left rows the review queue
+     * correctly labelled "No evidence. This should be impossible", and left
+     * them there for whatever ran next to photograph. The same mistake was in
+     * scripts/pairs.ts and is described in section 5 of the submission.
+     */
     const otherChannel = "product_hunt";
-    await db.insert(artifacts).values([
-      {
-        workspaceId: ws.id,
-        channel: otherChannel,
-        agentId: "launch_community",
-        kind: "post",
-        status: "draft",
-        content: "placeholder for the observation-gating check",
-        locale: "en",
-      },
-      {
-        workspaceId: ws.id,
-        channel: otherChannel,
-        agentId: "launch_community",
-        kind: "post",
-        status: "draft",
-        content: "second placeholder for the observation-gating check",
-        locale: "en",
-      },
-    ]);
+    const [citable] = await db
+      .select({ id: memoryRecords.id })
+      .from(memoryRecords)
+      .where(
+        and(eq(memoryRecords.workspaceId, ws.id), eq(memoryRecords.status, "active")),
+      )
+      .limit(1);
+
+    const fixtures = await db
+      .insert(artifacts)
+      .values(
+        [1, 2].map((i) => ({
+          workspaceId: ws.id,
+          channel: otherChannel,
+          agentId: "launch_community",
+          kind: "post",
+          status: "draft" as const,
+          content: `Placeholder ${i} for the observation-gating check`,
+          locale: "en",
+        })),
+      )
+      .returning({ id: artifacts.id });
+
+    await db.insert(artifactEvidence).values(
+      fixtures.map((f) => ({
+        artifactId: f.id,
+        memoryRecordId: citable?.id ?? null,
+        note: "e2e fixture for the unmeasured-channel gate.",
+      })),
+    );
 
     const replan = await runPlanner(ws.id, () => {});
     const gated = replan.skipped.find((s) => s.channel === otherChannel);
@@ -269,6 +313,13 @@ async function main() {
       gated
         ? gated.why
         : `${otherChannel} was not gated — skipped: ${replan.skipped.map((s) => s.channel).join(", ") || "none"}`,
+    );
+
+    await db.delete(artifacts).where(
+      inArray(
+        artifacts.id,
+        fixtures.map((f) => f.id),
+      ),
     );
 
     check(

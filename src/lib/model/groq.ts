@@ -1,4 +1,5 @@
 import "server-only";
+
 import { costOf } from "./pricing";
 import {
   estimateTokens,
@@ -15,6 +16,13 @@ import type { ModelProvider, ModelRequest, ModelResponse } from "./types";
  */
 
 const BASE = "https://api.groq.com/openai/v1";
+/**
+ * Default ceiling on how long a single call may sleep on a provider rate limit.
+ * Sized just over the one-minute token bucket, so ordinary pacing still happens
+ * inline and nothing longer does. Callers with no queue to fall back on raise it
+ * through `ModelRequest.maxWaitMs`.
+ */
+const DEFAULT_MAX_INLINE_WAIT_MS = 90_000;
 
 type GroqResponse = {
   choices?: Array<{
@@ -71,6 +79,25 @@ export const groqProvider: ModelProvider = {
           parseResetDuration(res.headers.get("retry-after")) ??
           parseResetDuration(res.headers.get("x-ratelimit-reset-tokens")) ??
           15_000;
+
+        /*
+         * A minute-scale wait is the token bucket refilling and worth sitting
+         * through. Anything longer is a daily or request-count limit, and
+         * sleeping on it inside the handler holds the job's lock while doing
+         * nothing — which is how a drain sat for twenty-three minutes with no
+         * model call in flight and no way to tell from the outside. Past the
+         * cap, fail: the queue already knows how to requeue with backoff, and a
+         * requeued job releases its lock and lets the rest of the queue move.
+         */
+        const ceiling = req.maxWaitMs ?? DEFAULT_MAX_INLINE_WAIT_MS;
+        if (waitMs > ceiling) {
+          throw new Error(
+            `Groq rate limit needs ${Math.ceil(waitMs / 1000)}s, longer than the ${
+              ceiling / 1000
+            }s this caller will wait inline. Requeued rather than held.`,
+          );
+        }
+
         req.onWait?.(
           `rate limited, retrying in ${Math.ceil(waitMs / 1000)}s (attempt ${attempt}/4)`,
         );

@@ -7,8 +7,11 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/v1/memory?type=&locale=&q=
  *
- * Every record carries its sources and an `unsourced` flag. Okara is closed
- * with no API; being open is the point (SPEC 7.11).
+ * Every record carries its sources, a `grounding` value and an `unsourced`
+ * flag. `unsourced` is true only when nothing grounds the record at all: a
+ * record compiled from other records reports `grounding: "derived"` and names
+ * its parents in `derivedFrom`. Okara is closed with no API; being open is the
+ * point (SPEC 7.11).
  */
 export async function GET(req: NextRequest) {
   const ws = await getOrCreateDefaultWorkspace();
@@ -26,6 +29,8 @@ export async function GET(req: NextRequest) {
     {
       workspace: { id: ws.id, name: ws.name, domain: ws.domain },
       count: records.length,
+      sourced: records.filter((r) => r.grounding === "sourced").length,
+      derived: records.filter((r) => r.grounding === "derived").length,
       unsourced: records.filter((r) => r.unsourced).length,
       records,
     },

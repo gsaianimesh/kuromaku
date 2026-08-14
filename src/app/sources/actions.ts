@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { demoRefusal } from "@/lib/demo";
 import { DEFAULT_MAX_PAGES, toOrigin } from "@/lib/ingest/crawl";
 import { enqueue } from "@/lib/jobs/queue";
 import { runWorker } from "@/lib/jobs/worker";
@@ -66,6 +67,9 @@ export async function runCrawlNowAction(): Promise<{
   log: string[];
   outcome: string | null;
 }> {
+  const refused = demoRefusal("Running a crawl");
+  if (refused) return { processed: 0, log: [refused.message], outcome: "refused" };
+
   const result = await runWorker({ maxJobs: 3, budgetMs: 55_000 });
   revalidatePath("/sources");
   revalidatePath("/jobs");

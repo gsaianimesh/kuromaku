@@ -29,21 +29,88 @@ import {
  * must resolve to a source actually given to the model, and a cited URL must
  * appear in search results actually returned. Anything that fails to resolve is
  * dropped from the citation list, not from the record — the record survives,
- * flagged unsourced with confidence capped below 0.5, exactly as SPEC 7.2 says.
+ * flagged and capped, exactly as SPEC 7.2 says. What it is capped to depends on
+ * whether anything else grounds it: see `writeRecord`.
  */
 
 /**
  * Total characters of source text allowed into one stage prompt.
  *
  * Sized against the tightest model budget we actually run on: Groq's free tier
- * caps several models at 8,000 tokens per minute for prompt plus completion.
- * At roughly four characters per token, 14,000 characters of sources plus the
- * instructions and prior records leaves room for a 2,500-token completion
- * inside that ceiling. Larger budgets 413 rather than degrade.
+ * caps gpt-oss-120b at 8,000 tokens per minute for prompt plus completion, and
+ * that ceiling applies to a single request as well. At roughly four characters
+ * per token, 10,000 characters of sources plus the instructions and a capped
+ * slice of prior records leaves room for a 2,200-token completion inside that
+ * ceiling. Larger budgets 413 rather than degrade.
  */
-const SOURCES_CHAR_BUDGET = 14_000;
-const MIN_PER_SOURCE = 700;
-const STAGE_MAX_TOKENS = 2500;
+const SOURCES_CHAR_BUDGET = 10_000;
+const MIN_PER_SOURCE = 600;
+const STAGE_MAX_TOKENS = 2000;
+
+/**
+ * The whole prompt has to fit under the provider's per-minute token limit,
+ * because that limit applies to a single request too: exceed it and the call is
+ * rejected outright rather than queued.
+ *
+ * Budgeting each section separately did not achieve that. Sources were capped,
+ * prior records were not, and the competitors stage adds a search block that
+ * nothing measured — the three together came to 8,334 tokens against a ceiling
+ * of 8,000 and the stage failed after the crawl had already run. This is the
+ * check that looks at the assembled prompt instead of its parts.
+ */
+const REQUEST_TOKEN_CEILING = 8_000;
+const CHARS_PER_TOKEN = 4;
+
+/** Deliberately crude and deliberately pessimistic; it only has to be a bound. */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+/**
+ * Trims the assembled prompt to fit, cutting the sections that can afford it
+ * first. Returns what was cut so the job log says so rather than the reader
+ * wondering why a stage saw less than the previous one.
+ */
+function fitPrompt(
+  sections: { sources: string; search: string; priors: string; fixed: string },
+  completionTokens: number,
+): { sources: string; search: string; priors: string; note: string | null } {
+  const room = REQUEST_TOKEN_CEILING - completionTokens - estimateTokens(sections.fixed);
+  let { sources, search, priors } = sections;
+  const cuts: string[] = [];
+
+  // Search results first: they are the most redundant, several per query.
+  for (const key of ["search", "sources", "priors"] as const) {
+    const total = estimateTokens(sources) + estimateTokens(search) + estimateTokens(priors);
+    if (total <= room) break;
+
+    const over = (total - room) * CHARS_PER_TOKEN;
+    const current = key === "search" ? search : key === "sources" ? sources : priors;
+    if (current.length === 0) continue;
+
+    const keep = Math.max(0, current.length - over);
+    const trimmed = current.slice(0, keep);
+    cuts.push(`${key} ${current.length}→${trimmed.length} chars`);
+    if (key === "search") search = trimmed;
+    else if (key === "sources") sources = trimmed;
+    else priors = trimmed;
+  }
+
+  return {
+    sources,
+    search,
+    priors,
+    note: cuts.length > 0 ? `trimmed to fit the request ceiling: ${cuts.join(", ")}` : null,
+  };
+}
+
+/**
+ * Prior records are the other half of a stage prompt and they grow with the
+ * memory. Left uncapped they pushed the late stages over the same ceiling the
+ * source budget exists to respect — the budget was only ever enforced on the
+ * half that happened to be measured.
+ */
+const PRIOR_RECORDS_CHAR_BUDGET = 7_000;
 
 export type CompileProgress = (message: string) => void;
 
@@ -53,7 +120,10 @@ export type CompileSummary = {
     locale?: string;
     emitted: number;
     sourced: number;
-    unsourced: number;
+    /** No citation of its own, but compiled from records that have one. */
+    derived: number;
+    /** Neither a citation nor a parent record. This is what the warning is for. */
+    ungrounded: number;
     superseded: number;
     attempts: number;
     searches?: number;
@@ -61,7 +131,7 @@ export type CompileSummary = {
     skipped?: string;
   }>;
   totalRecords: number;
-  totalUnsourced: number;
+  totalUngrounded: number;
   researchAvailable: boolean;
   researchNote?: string;
 };
@@ -93,9 +163,28 @@ function renderSources(rows: Source[]): { block: string; truncated: number } {
 
 function renderPriorRecords(rows: MemoryRecord[]): string {
   if (rows.length === 0) return "(none)";
-  return rows
-    .map((r) => `- [${r.type}] ${r.key}: ${JSON.stringify(r.value)}`)
-    .join("\n");
+
+  // Highest confidence first, so if the budget cuts anything it cuts the
+  // records the compiler is least sure of rather than an arbitrary tail.
+  const ordered = [...rows].sort((a, b) => b.confidence - a.confidence);
+  const lines: string[] = [];
+  let used = 0;
+  let dropped = 0;
+
+  for (const r of ordered) {
+    const line = `- [${r.type}] ${r.key}: ${JSON.stringify(r.value)}`;
+    if (used + line.length > PRIOR_RECORDS_CHAR_BUDGET && lines.length > 0) {
+      dropped++;
+      continue;
+    }
+    lines.push(line);
+    used += line.length + 1;
+  }
+
+  if (dropped > 0) {
+    lines.push(`[${dropped} lower-confidence record(s) omitted for length]`);
+  }
+  return lines.join("\n");
 }
 
 function renderSearch(results: SearchResult[]): string {
@@ -116,6 +205,8 @@ async function writeRecord(
   locale: string,
   emitted: EmittedRecord,
   citations: Array<{ sourceId?: string; url?: string; snippet?: string }>,
+  /** The records this stage was shown. Empty for a stage that reads only pages. */
+  parents: MemoryRecord[],
 ): Promise<{ superseded: boolean; recordId: string }> {
   const db = getDb();
 
@@ -133,9 +224,32 @@ async function writeRecord(
     )
     .limit(1);
 
-  // Unsourced records are capped below 0.5 regardless of what the model claimed.
+  /*
+   * Three grounding states, not two.
+   *
+   * A record with a citation stands on its own and keeps the confidence the
+   * model gave it. A record with no citation but with parents is *derived*: it
+   * was compiled from records that are themselves grounded, which is how a
+   * shared strategy layer is supposed to work. Capping those at 0.4 alongside
+   * genuine inventions said the memory was far less grounded than it was, and
+   * it flattened the distinction the whole design rests on.
+   *
+   * A derived record is capped at the least confident thing it rests on. It
+   * cannot be more certain than its own foundation, and the rule needs no
+   * chosen constant — the number comes from the graph.
+   *
+   * Only a record with neither a citation nor a parent is ungrounded, and that
+   * is what the 0.4 cap and the red warning are for.
+   */
+  const parentFloor =
+    parents.length > 0 ? Math.min(...parents.map((p) => p.confidence)) : null;
+
   const confidence =
-    citations.length === 0 ? Math.min(emitted.confidence, 0.4) : emitted.confidence;
+    citations.length > 0
+      ? emitted.confidence
+      : parentFloor !== null
+        ? Math.min(emitted.confidence, parentFloor)
+        : Math.min(emitted.confidence, 0.4);
 
   const [created] = await db
     .insert(memoryRecords)
@@ -219,7 +333,7 @@ export async function compileWorkspace(
   const summary: CompileSummary = {
     stages: [],
     totalRecords: 0,
-    totalUnsourced: 0,
+    totalUngrounded: 0,
     researchAvailable: false,
   };
 
@@ -306,15 +420,28 @@ Reuse an existing key verbatim whenever your record is about the same thing, eve
       // Only the stages that read the company's own prose get raw page text.
       // The rest work from compiled records — the shared strategy layer doing
       // its job, and the reason each prompt stays inside the token budget.
-      const sourcesSection = stage.needsSources
-        ? `\n\n=== SOURCES ===\n${sourceBlock}`
-        : `\n\n(Raw page text is not supplied to this stage. Ground records in the compiled records above; cite a source index only if the record above names one.)`;
-
-      const userContent = `Company: ${workspace.name} (${workspace.domain})
+      const header = `Company: ${workspace.name} (${workspace.domain})
 Locales in this workspace: ${workspace.locales.join(", ")}${localeNote}
 
 === PREVIOUSLY COMPILED RECORDS ===
-${renderPriorRecords(dependencies)}${keyNote}${sourcesSection}${searchBlock}`;
+`;
+
+      const fitted = fitPrompt(
+        {
+          priors: renderPriorRecords(dependencies),
+          sources: stage.needsSources ? sourceBlock : "",
+          search: searchBlock,
+          fixed: header + keyNote + systemPromptFor(stage),
+        },
+        STAGE_MAX_TOKENS,
+      );
+      if (fitted.note) log(`  ${fitted.note}`);
+
+      const sourcesSection = stage.needsSources
+        ? `\n\n=== SOURCES ===\n${fitted.sources}`
+        : `\n\n(Raw page text is not supplied to this stage. Ground records in the compiled records above; cite a source index only if the record above names one.)`;
+
+      const userContent = `${header}${fitted.priors}${keyNote}${sourcesSection}${fitted.search}`;
 
       let emitted: EmittedRecord[];
       let attempts = 0;
@@ -352,7 +479,8 @@ ${renderPriorRecords(dependencies)}${keyNote}${sourcesSection}${searchBlock}`;
             locale: stage.perLocale ? effectiveLocale : undefined,
             emitted: 0,
             sourced: 0,
-            unsourced: 0,
+            derived: 0,
+            ungrounded: 0,
             superseded: 0,
             attempts: 2,
             skipped: e.message,
@@ -363,7 +491,8 @@ ${renderPriorRecords(dependencies)}${keyNote}${sourcesSection}${searchBlock}`;
       }
 
       let sourced = 0;
-      let unsourced = 0;
+      let derived = 0;
+      let ungrounded = 0;
       let supersededCount = 0;
       let edges = 0;
 
@@ -399,6 +528,7 @@ ${renderPriorRecords(dependencies)}${keyNote}${sourcesSection}${searchBlock}`;
           effectiveLocale,
           record,
           citations,
+          dependencies,
         );
 
         if (dependencyIds.length > 0) {
@@ -417,7 +547,8 @@ ${renderPriorRecords(dependencies)}${keyNote}${sourcesSection}${searchBlock}`;
         }
 
         if (citations.length > 0) sourced++;
-        else unsourced++;
+        else if (dependencyIds.length > 0) derived++;
+        else ungrounded++;
         if (superseded) supersededCount++;
       }
 
@@ -478,22 +609,23 @@ ${renderPriorRecords(dependencies)}${keyNote}${sourcesSection}${searchBlock}`;
         locale: stage.perLocale ? effectiveLocale : undefined,
         emitted: emitted.length,
         sourced,
-        unsourced,
+        derived,
+        ungrounded,
         superseded: supersededCount,
         attempts,
         ...(stage.runsResearch ? { searches, cachedSearches } : {}),
       });
       summary.totalRecords += emitted.length;
-      summary.totalUnsourced += unsourced;
+      summary.totalUngrounded += ungrounded;
 
       log(
-        `stage ${label}: ${emitted.length} record(s), ${sourced} sourced, ${unsourced} unsourced, ${supersededCount} superseded, ${edges} derivation edge(s)`,
+        `stage ${label}: ${emitted.length} record(s), ${sourced} sourced, ${derived} derived, ${ungrounded} ungrounded, ${supersededCount} superseded, ${edges} derivation edge(s)`,
       );
     }
   }
 
   log(
-    `compile done: ${summary.totalRecords} record(s), ${summary.totalUnsourced} unsourced, ${failures.length} stage(s) failed`,
+    `compile done: ${summary.totalRecords} record(s), ${summary.totalUngrounded} ungrounded, ${failures.length} stage(s) failed`,
   );
 
   if (failures.length > 0) {

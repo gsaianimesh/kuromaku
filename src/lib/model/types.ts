@@ -20,6 +20,15 @@ export type ModelRequest = {
   jsonMode?: boolean;
   /** Surfaces rate-limit waits to the job log so a pause never looks like a hang. */
   onWait?: (message: string) => void;
+  /**
+   * How long this call may sleep on a provider rate limit before giving up.
+   *
+   * A job must not sit on a long wait: it holds its lock while doing nothing,
+   * and the queue already knows how to requeue with backoff. A batch script has
+   * no queue to fall back to, so it can afford to wait. The default suits the
+   * job path; scripts raise it.
+   */
+  maxWaitMs?: number;
 };
 
 export type ModelResponse = {

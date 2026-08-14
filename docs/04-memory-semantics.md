@@ -16,10 +16,9 @@ property of one *version* of that record.
 
 ![A memory record showing its confidence, locale, origin, version, value, source link and snippet](images/memory-record-sourced.png)
 
-Note the badge row: confidence `0.90`, locale `en`, origin `compiled`, version
-`v3`. Below the JSON value is the resolved source — a clickable link to the page
-it came from — and beneath that, in quotes, the snippet the model cited as
-supporting text.
+Note the badge row: confidence, locale, origin and version. Below the JSON value
+is the resolved source — a clickable link to the page it came from — and beneath
+that, in quotes, the snippet the model cited as supporting text.
 
 ## Versioning and supersede
 
@@ -69,17 +68,17 @@ await db.insert(recordSources).values({
 });
 ```
 
-That row matters: without it a human-edited record would count as *unsourced*
-and get a warning, which would be wrong. A human asserting something is a form
-of provenance, just not a URL.
+That row matters: without it a human-edited record would count as *ungrounded*
+and get a warning, which would be wrong. A human asserting something is a form of
+provenance, just not a URL.
 
 The full chain is browsable at `/memory/<id>`:
 
-![Version history showing v1 and v2 superseded and v3 active with human origin](images/memory-history.png)
+![Version history showing v1 and v2 superseded and v3 active with human origin](images/memory-history.jpg)
 
-Note that v1 and v2 are `superseded` with origin `compiled`, and v3 is `active`
-with origin `human`. Nothing was deleted — the compiler produced two versions
-over two compile runs, then a human correction produced the third.
+Note that the older versions are `superseded` with origin `compiled` and the
+newest is `active`. Nothing was deleted: each compile run added a version, and a
+human correction adds one the same way.
 
 ### Ordering hazard
 
@@ -139,33 +138,30 @@ Two properties follow:
 
 The citation is discarded. **The record is not.**
 
-This is the deliberate part. A record whose every citation fails to resolve
-becomes an unsourced record — it is still written, still visible, still usable,
-but it carries no `record_sources` rows and its confidence is capped:
-
-```ts
-// Unsourced records are capped below 0.5 regardless of what the model claimed.
-const confidence =
-  citations.length === 0 ? Math.min(emitted.confidence, 0.4) : emitted.confidence;
-```
+This is the deliberate part. A record whose every citation fails to resolve is
+still written, still visible, still usable — it simply carries no
+`record_sources` rows. What that costs it depends on whether anything else
+accounts for it, which is the subject of *Grounding* below: a record with
+parents in the derivation graph is capped at its least confident parent, and one
+with neither a citation nor a parent is capped at `0.4` and flagged in red.
 
 The alternative — dropping the record — would silently lose information and make
 the memory look cleaner than it is. The specification is explicit that a record
 the model cannot source is emitted at low confidence and flagged, not dropped.
 
-![An unsourced memory record with a red warning reading No source](images/memory-unsourced.png)
+![A memory record with no source of its own, naming the records it was compiled from](images/memory-derived.png)
 
-Note the `unsourced` badge in the header row and the warning underneath: *"No
-source. This record is not grounded in any crawled page or search result — treat
-it as an unverified inference."* The confidence badge reads `0.40`, which is the
-cap, not a value the model chose.
+Note that there is no source line, because no crawled page states this. In its
+place is `compiled from:` and the records it was built on, each a link. Following
+one reaches a record that does cite a page.
 
 ### The cap is applied at write time, not display time
 
 `writeRecord` computes the capped confidence before the insert. A record that
-reaches the database unsourced-and-confident is not possible through the
-compiler. This was verified end to end — across 48 active records with 18
-unsourced, the maximum confidence among the unsourced set was exactly `0.40`.
+reaches the database ungrounded-and-confident is not possible through the
+compiler. Verified end to end: across 46 active records, 31 sourced and 15
+derived, no derived record exceeded the confidence of the least certain record
+beneath it, and nothing was ungrounded at all.
 
 ## How confidence is assigned
 
@@ -185,16 +181,60 @@ Three inputs, applied in order:
    /*
     * A model that omits confidence has told us nothing about how sure it is, so
     * 0.5 records exactly that — neither trusted nor dismissed. It is not a
-    * fabricated measurement: an unsourced record is still capped below 0.5 when
-    * it is written, so nothing unsourced can present as confident.
+    * fabricated measurement: an ungrounded record is still capped below 0.5 when
+    * it is written, so nothing ungrounded can present as confident.
     */
    out.confidence = obj.confidence ?? 0.5;
    ```
 
-3. **The unsourced cap**, applied last, at write time.
+3. **The grounding cap**, applied last, at write time — see *Grounding* below.
 
 A human edit sets confidence explicitly through the editor form; the default
 presented is the prior version's value.
+
+## Grounding: three states, not two
+
+A record accounts for itself in one of three ways, and `RecordWithSources`
+reports which as `grounding`:
+
+| state | meaning | confidence rule |
+|---|---|---|
+| `sourced` | at least one `record_sources` row — a crawled page, a search result, or a human assertion | keeps what the model gave it |
+| `derived` | no source of its own, but incoming `record_derivations` edges | capped at the least confident parent |
+| `ungrounded` | neither | capped at 0.4, flagged in red |
+
+The middle state did not exist at first, and its absence was a real
+misrepresentation. A positioning statement is not written on any page; the
+compiler builds it from product facts and ICP segments, which is the shared
+strategy layer working exactly as designed. Treating that as "unsourced"
+alongside a genuine invention put fifteen fully accountable records behind a red
+warning at 0.40 and told the reader the memory was far less grounded than it
+was.
+
+The cap on a derived record needs no chosen constant. It cannot be more certain
+than its own foundation, so the number comes from the graph:
+
+```ts
+const parentFloor =
+  parents.length > 0 ? Math.min(...parents.map((p) => p.confidence)) : null;
+
+const confidence =
+  citations.length > 0
+    ? emitted.confidence
+    : parentFloor !== null
+      ? Math.min(emitted.confidence, parentFloor)
+      : Math.min(emitted.confidence, 0.4);
+```
+
+`unsourced` survives as a boolean on the same type, and still means what it
+always meant — nothing in the system accounts for this record — because the API
+response, the MCP manifest and the golden set all assert on it. It is now true
+only for `ungrounded`.
+
+On the seeded workspace nothing is ungrounded: 31 records are sourced and 15 are
+derived. The state is still reachable — `product_facts` is the one stage with no
+dependencies, so an uncited fact there has nothing to fall back on — and
+`eval/golden.ts` still asserts the rule for that stage.
 
 ## Staleness propagation
 
@@ -350,7 +390,7 @@ return rows.map((r) => {
 The same shape is what the REST and MCP surfaces return, so an external consumer
 sees provenance and the unsourced flag without asking for them.
 
-![The memory browser grouped by record type](images/memory-full.png)
+![The memory browser grouped by record type](images/memory-full.jpg)
 
 Note the header counts — active records, how many are unsourced, average
 confidence, and the locales present — and that each type is its own panel with

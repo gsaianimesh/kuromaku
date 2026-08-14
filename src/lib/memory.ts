@@ -12,6 +12,27 @@ import {
   type MemoryType,
 } from "./db/schema";
 
+/**
+ * How a record is grounded.
+ *
+ * `sourced`     at least one record_sources row: a crawled page, a search
+ *               result, or a human assertion.
+ * `derived`     no source of its own, but compiled from records that have one.
+ *               This is the shared strategy layer working as designed, and it
+ *               is shown as a provenance trail rather than a warning.
+ * `ungrounded`  neither. Nothing in the system can say where this came from,
+ *               so it is capped below 0.5 and flagged.
+ */
+export type Grounding = "sourced" | "derived" | "ungrounded";
+
+export type DerivationParent = {
+  id: string;
+  type: MemoryType;
+  key: string;
+  status: string;
+  stage: string;
+};
+
 export type RecordWithSources = MemoryRecord & {
   sources: Array<{
     id: string;
@@ -19,7 +40,14 @@ export type RecordWithSources = MemoryRecord & {
     snippet: string | null;
     sourceTitle: string | null;
   }>;
-  /** True when nothing grounds this record — renders a warning (SPEC section 6). */
+  /** The records this one was compiled from, for a `derived` record's trail. */
+  derivedFrom: DerivationParent[];
+  grounding: Grounding;
+  /**
+   * True only for `ungrounded`. Kept under this name because it is the field
+   * the API, the MCP manifest and the golden set all assert on, and it still
+   * means what it always meant: nothing in the system grounds this record.
+   */
   unsourced: boolean;
 };
 
@@ -76,9 +104,44 @@ async function attachSources(rows: MemoryRecord[]): Promise<RecordWithSources[]>
     byRecord.set(l.recordId, list);
   }
 
+  /*
+   * One hop up only. A record's own provenance line names what it was compiled
+   * from; those parents carry their own lines, so the reader walks the chain by
+   * clicking rather than reading a transitive closure that would run to dozens
+   * of entries on a late-stage record.
+   */
+  const parents = await db
+    .select({
+      derivedRecordId: recordDerivations.derivedRecordId,
+      stage: recordDerivations.stage,
+      id: memoryRecords.id,
+      type: memoryRecords.type,
+      key: memoryRecords.key,
+      status: memoryRecords.status,
+    })
+    .from(recordDerivations)
+    .innerJoin(memoryRecords, eq(recordDerivations.sourceRecordId, memoryRecords.id))
+    .where(
+      inArray(
+        recordDerivations.derivedRecordId,
+        rows.map((r) => r.id),
+      ),
+    )
+    .orderBy(memoryRecords.type, memoryRecords.key);
+
+  const parentsByRecord = new Map<string, DerivationParent[]>();
+  for (const p of parents) {
+    const list = parentsByRecord.get(p.derivedRecordId) ?? [];
+    list.push({ id: p.id, type: p.type, key: p.key, status: p.status, stage: p.stage });
+    parentsByRecord.set(p.derivedRecordId, list);
+  }
+
   return rows.map((r) => {
     const s = byRecord.get(r.id) ?? [];
-    return { ...r, sources: s, unsourced: s.length === 0 };
+    const derivedFrom = parentsByRecord.get(r.id) ?? [];
+    const grounding: Grounding =
+      s.length > 0 ? "sourced" : derivedFrom.length > 0 ? "derived" : "ungrounded";
+    return { ...r, sources: s, derivedFrom, grounding, unsourced: grounding === "ungrounded" };
   });
 }
 
@@ -135,6 +198,11 @@ export async function recordHistory(
 
 export async function memoryStats(workspaceId: string): Promise<{
   total: number;
+  /** Records with a source of their own. */
+  sourced: number;
+  /** Records with no source but with a derivation parent. */
+  derived: number;
+  /** Records with neither. This is the number that should worry a reader. */
   unsourced: number;
   byType: Record<string, number>;
   locales: string[];
@@ -176,20 +244,41 @@ export async function memoryStats(workspaceId: string): Promise<{
       ),
     );
 
-  const [unsourcedRow] = await db
-    .select({ n: sql<number>`count(*)::int` })
-    .from(memoryRecords)
-    .where(
-      and(
-        eq(memoryRecords.workspaceId, workspaceId),
-        eq(memoryRecords.status, "active"),
-        sql`not exists (select 1 from ${recordSources} rs where rs.record_id = ${memoryRecords.id})`,
-      ),
-    );
+  /*
+   * One pass, three buckets: has a source, has only a parent, has neither.
+   *
+   * Written as one raw statement with its own alias. Expressed through the
+   * query builder, the correlated `exists` subqueries silently failed to bind
+   * the outer row and every bucket came back zero — a memory with 29 sourced
+   * records reported none, and the page said so in the header.
+   */
+  const groundingRows = await db.execute<{
+    sourced: number;
+    derived: number;
+    ungrounded: number;
+  }>(sql`
+    select
+      count(*) filter (
+        where exists (select 1 from record_sources rs where rs.record_id = m.id)
+      )::int as sourced,
+      count(*) filter (
+        where not exists (select 1 from record_sources rs where rs.record_id = m.id)
+          and exists (select 1 from record_derivations rd where rd.derived_record_id = m.id)
+      )::int as derived,
+      count(*) filter (
+        where not exists (select 1 from record_sources rs where rs.record_id = m.id)
+          and not exists (select 1 from record_derivations rd where rd.derived_record_id = m.id)
+      )::int as ungrounded
+    from memory_records m
+    where m.workspace_id = ${workspaceId}::uuid and m.status = 'active'
+  `);
+  const grounding = groundingRows.rows[0];
 
   return {
     total: totals?.total ?? 0,
-    unsourced: unsourcedRow?.n ?? 0,
+    sourced: grounding?.sourced ?? 0,
+    derived: grounding?.derived ?? 0,
+    unsourced: grounding?.ungrounded ?? 0,
     byType: Object.fromEntries(byTypeRows.map((r) => [r.type, r.n])),
     locales: localeRows.map((r) => r.locale).sort(),
     averageConfidence: totals?.avg ?? null,

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { demoRefusal, refuseOnDemo } from "@/lib/demo";
 import {
   MODEL_PROVIDERS,
   SEARCH_PROVIDERS,
@@ -29,6 +30,9 @@ export async function saveModelKeyAction(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
+  const refused = demoRefusal("Storing a model key");
+  if (refused) return refused;
+
   const parsed = saveSchema.safeParse({
     provider: formData.get("provider"),
     key: formData.get("key"),
@@ -78,6 +82,8 @@ export async function saveModelKeyAction(
 }
 
 export async function clearModelKeyAction(): Promise<void> {
+  refuseOnDemo("Clearing the stored model key");
+
   const ws = await getOrCreateDefaultWorkspace();
   await clearModelKey(ws.id);
   revalidatePath("/settings");

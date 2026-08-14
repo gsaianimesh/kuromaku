@@ -9,7 +9,7 @@ page**. Every hop is a link in the UI.
 
 `/review`. Read the content, then the evidence panel beside it.
 
-![The review queue showing artifacts with status counts](images/review-full.png)
+![The review queue showing artifacts with status counts](images/review-full.jpg)
 
 Note the status counts along the top. An artifact badged `stale` is the first
 thing to look at — its content may be fine while the memory beneath it has
@@ -46,20 +46,23 @@ If `critic_notes.revisedAutomatically` is true, the text you are reading is the
 
 ### 3. Follow evidence into the memory
 
-Click a record key. If it shows an `unsourced` badge, the draft is built on an
-ungrounded inference and that is very likely the root cause.
+Click a record key and read how it accounts for itself. A `sourced` record links
+the page it came from. A `derived` record names the records it was compiled from,
+each a link, so the trail continues upward.
 
-![An unsourced memory record with a red warning reading No source](images/memory-unsourced.png)
+![A memory record with no source of its own, naming the records it was compiled from](images/memory-derived.png)
 
-Note the confidence reads `0.40` — the cap applied at write time, not a value
-the model chose. Anything at exactly 0.40 with no source is a claim the compiler
-could not ground.
+An `unsourced` badge is the one to worry about: nothing in the system accounts
+for that record, its confidence reads `0.40` because that is the cap applied at
+write time rather than a value the model chose, and a draft built on it is
+resting on an ungrounded inference. On the seeded workspace there are none — see
+[04 — Grounding](04-memory-semantics.md#grounding-three-states-not-two).
 
 ### 4. Read the version history
 
 `/memory/<id>` → the full chain.
 
-![Version history showing v1 and v2 superseded and v3 active with human origin](images/memory-history.png)
+![Version history showing v1 and v2 superseded and v3 active with human origin](images/memory-history.jpg)
 
 Note the `origin` badge per version. A record whose active version is `human`
 was corrected by hand; one at `compiled` v3 has been rewritten by three separate
@@ -71,7 +74,7 @@ Click the source link on any sourced version to open the crawled page, or go to
 `/sources/<id>` for the exact extracted text the compiler saw — not the live
 page, which may have changed.
 
-![Crawled pages listed with their content hashes](images/sources.png)
+![Crawled pages listed with their content hashes](images/sources.jpg)
 
 Note the `Chars` and `Hash` columns. A source with very few characters is
 probably a client-rendered page whose content the crawler never saw.
@@ -92,7 +95,7 @@ curl 'localhost:3000/api/v1/memory' | jq '.records[] | select(.key=="founders")'
 
 `/jobs` → find the job → **inspect**.
 
-![Job inspector showing job metadata, reason, payload and model calls](images/job-inspector.png)
+![Job inspector showing job metadata, reason, payload and model calls](images/job-inspector.jpg)
 
 Read in this order:
 

@@ -14,6 +14,8 @@
  * meaningful, and fail loudly when a prompt change breaks them.
  */
 
+import { emittedRecord } from "../src/lib/compile/stages";
+
 export type Assertion = {
   name: string;
   /** Returns null when satisfied, or a reason when violated. */
@@ -64,33 +66,64 @@ export const noFabricatedMetrics: Assertion = {
   },
 };
 
+/*
+ * Shape assertions run against the *normalised* record, not the raw JSON.
+ *
+ * The compiler never consumes raw model output: `emittedRecord` preprocesses it
+ * first, deriving a key from the payload when the model omits one and defaulting
+ * an absent confidence to 0.5. Asserting on the raw shape therefore tested a
+ * layer nothing uses. It also produced pure noise — switching the compile model
+ * turned six of these green cases red overnight while the compiler kept
+ * producing perfectly good keyed records, because the new model simply nests its
+ * fields differently.
+ *
+ * What matters is that a stage's output survives into a usable record. That is
+ * what these check, and an output the normaliser genuinely cannot rescue still
+ * fails.
+ */
+const usableRecords: Assertion = {
+  name: "every record normalises into a usable one",
+  check: (_o, parsed) => {
+    const records = (parsed as { records?: unknown[] })?.records;
+    if (!Array.isArray(records)) return null;
+
+    const problems: string[] = [];
+    records.forEach((r, i) => {
+      const result = emittedRecord.safeParse(r);
+      if (!result.success) {
+        const first = result.error.issues[0];
+        problems.push(`record ${i}: ${first.path.join(".") || "(root)"} ${first.message}`);
+      }
+    });
+    return problems.length > 0
+      ? `${problems.length} of ${records.length} unusable — ${problems[0]}`
+      : null;
+  },
+};
+
 const confidenceInRange: Assertion = {
   name: "confidence within 0..1",
   check: (_o, parsed) => {
-    const records = (parsed as { records?: Array<{ confidence?: unknown }> })?.records;
+    const records = (parsed as { records?: unknown[] })?.records;
     if (!Array.isArray(records)) return null;
     for (const r of records) {
-      const c = typeof r.confidence === "string" ? Number(r.confidence) : r.confidence;
+      const result = emittedRecord.safeParse(r);
+      if (!result.success) continue; // usableRecords reports this
+      const c = result.data.confidence;
       if (typeof c !== "number" || Number.isNaN(c) || c < 0 || c > 1) {
-        return `confidence out of range: ${JSON.stringify(r.confidence)}`;
+        return `confidence out of range after normalisation: ${JSON.stringify(c)}`;
       }
     }
     return null;
   },
 };
 
-const everyRecordHasKey: Assertion = {
-  name: "every record is addressable",
-  check: (_o, parsed) => {
-    const records = (parsed as { records?: Array<Record<string, unknown>> })?.records;
-    if (!Array.isArray(records)) return null;
-    const bad = records.filter(
-      (r) => typeof r.key !== "string" || r.key.trim().length === 0,
-    );
-    return bad.length > 0 ? `${bad.length} record(s) have no key` : null;
-  },
-};
-
+/**
+ * For a stage with no dependencies. Nothing upstream can ground its output, so
+ * an uncited record there is genuinely ungrounded and must not present as a
+ * fact. A stage that *does* receive prior records is a different case — see
+ * `noPhantomCitations` below.
+ */
 const citesOrDeclares: Assertion = {
   name: "cites a source or declares low confidence",
   check: (_o, parsed) => {
@@ -109,12 +142,44 @@ const citesOrDeclares: Assertion = {
         (Array.isArray(r.sourceUrls) && r.sourceUrls.length > 0);
       const c = typeof r.confidence === "string" ? Number(r.confidence) : r.confidence;
       if (!cited && typeof c === "number" && c >= 0.5) {
-        return `an uncited record claims confidence ${c} — uncited records must sit below 0.5`;
+        return `an uncited record claims confidence ${c} — a record with neither a source nor a parent must sit below 0.5`;
       }
     }
     return null;
   },
 };
+
+/**
+ * For a stage that receives prior records. Its uncited output is *derived*, not
+ * ungrounded, so the below-0.5 rule does not apply — the writer caps a derived
+ * record at the confidence of the least certain record it rests on instead.
+ *
+ * What still has to hold is that a claimed citation is real. The compiler drops
+ * an index it never supplied, so an invented one silently costs the record its
+ * provenance rather than failing loudly; this is the assertion that notices.
+ */
+function noPhantomCitations(sourceCount: number): Assertion {
+  return {
+    name: "cites only sources it was given",
+    check: (_o, parsed) => {
+      const records = (parsed as {
+        records?: Array<{ sourceIndices?: unknown }>;
+      })?.records;
+      if (!Array.isArray(records)) return null;
+
+      for (const r of records) {
+        if (!Array.isArray(r.sourceIndices)) continue;
+        for (const idx of r.sourceIndices) {
+          const n = typeof idx === "string" ? Number(idx) : idx;
+          if (typeof n !== "number" || !Number.isInteger(n) || n < 0 || n >= sourceCount) {
+            return `cited source index ${JSON.stringify(idx)} but only ${sourceCount} source(s) were supplied`;
+          }
+        }
+      }
+      return null;
+    },
+  };
+}
 
 // --- the set ----------------------------------------------------------------
 
@@ -123,7 +188,7 @@ export const GOLDEN_CASES: GoldenCase[] = [
     id: "compiler-product-facts-shape",
     area: "compiler",
     description: "Product facts stage returns addressable, scored records",
-    assertions: [isJson, hasArray("records"), everyRecordHasKey, confidenceInRange],
+    assertions: [isJson, hasArray("records"), usableRecords, confidenceInRange],
   },
   {
     id: "compiler-product-facts-provenance",
@@ -141,19 +206,20 @@ export const GOLDEN_CASES: GoldenCase[] = [
     id: "compiler-icp-shape",
     area: "compiler",
     description: "ICP stage returns addressable, scored records",
-    assertions: [isJson, hasArray("records"), everyRecordHasKey, confidenceInRange],
+    assertions: [isJson, hasArray("records"), usableRecords, confidenceInRange],
   },
   {
     id: "compiler-icp-provenance",
     area: "compiler",
-    description: "ICP segments cite sources or admit low confidence",
-    assertions: [citesOrDeclares],
+    description:
+      "ICP segments cite only sources they were shown; uncited ones are derived from product facts, not ungrounded",
+    assertions: [noPhantomCitations(2)],
   },
   {
     id: "compiler-positioning-shape",
     area: "compiler",
     description: "Positioning stage returns valid records",
-    assertions: [isJson, hasArray("records"), everyRecordHasKey, confidenceInRange],
+    assertions: [isJson, hasArray("records"), usableRecords, confidenceInRange],
   },
   {
     id: "compiler-positioning-no-metrics",
@@ -165,13 +231,13 @@ export const GOLDEN_CASES: GoldenCase[] = [
     id: "compiler-pillars-shape",
     area: "compiler",
     description: "Messaging pillars return valid records",
-    assertions: [isJson, hasArray("records"), everyRecordHasKey],
+    assertions: [isJson, hasArray("records"), usableRecords],
   },
   {
     id: "compiler-objections-shape",
     area: "compiler",
     description: "Objections return valid records",
-    assertions: [isJson, hasArray("records"), everyRecordHasKey],
+    assertions: [isJson, hasArray("records"), usableRecords],
   },
   {
     id: "compiler-competitors-no-invention",
@@ -184,19 +250,19 @@ export const GOLDEN_CASES: GoldenCase[] = [
     id: "compiler-channels-shape",
     area: "compiler",
     description: "Channel priorities return ranked, addressable records",
-    assertions: [isJson, hasArray("records"), everyRecordHasKey, confidenceInRange],
+    assertions: [isJson, hasArray("records"), usableRecords, confidenceInRange],
   },
   {
     id: "compiler-roadmap-shape",
     area: "compiler",
     description: "Roadmap items return addressable records",
-    assertions: [isJson, hasArray("records"), everyRecordHasKey],
+    assertions: [isJson, hasArray("records"), usableRecords],
   },
   {
     id: "compiler-voice-shape",
     area: "compiler",
     description: "Voice rules return addressable records",
-    assertions: [isJson, hasArray("records"), everyRecordHasKey],
+    assertions: [isJson, hasArray("records"), usableRecords],
   },
   {
     id: "compiler-voice-absent-locale",

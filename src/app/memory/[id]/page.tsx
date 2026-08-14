@@ -53,7 +53,8 @@ export default async function RecordHistoryPage({
                     {v.origin}
                   </Badge>
                   <Badge>confidence {v.confidence.toFixed(2)}</Badge>
-                  {v.unsourced && <Badge tone="bad">unsourced</Badge>}
+                  {v.grounding === "derived" && <Badge tone="idle">derived</Badge>}
+                  {v.grounding === "ungrounded" && <Badge tone="bad">unsourced</Badge>}
                   <span className="text-[11px] text-dim font-mono ml-auto">
                     {v.createdAt.toISOString()}
                   </span>

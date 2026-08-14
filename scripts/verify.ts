@@ -187,7 +187,7 @@ async function main() {
     .where(inArray(jobs.id, [c1!.id, c2!.id]));
 
   // Full lifecycle: claim → run → complete
-  const drain = await runWorker({ maxJobs: 20 });
+  const drain = await runWorker({ maxJobs: 20, onlyTypes: ["noop"] });
   const doneRow = await db
     .select()
     .from(jobs)
@@ -208,7 +208,7 @@ async function main() {
     payload: { sleepMs: 0, shouldFail: true },
     maxAttempts: 2,
   });
-  const firstPass = await runWorker({ maxJobs: 5 });
+  const firstPass = await runWorker({ maxJobs: 5, onlyTypes: ["noop"] });
   const afterOne = (
     await db.select().from(jobs).where(eq(jobs.idempotencyKey, failKey))
   )[0];
@@ -230,7 +230,7 @@ async function main() {
     .update(jobs)
     .set({ runAfter: new Date(Date.now() - 1000) })
     .where(eq(jobs.idempotencyKey, failKey));
-  await runWorker({ maxJobs: 5 });
+  await runWorker({ maxJobs: 5, onlyTypes: ["noop"] });
   const afterTwo = (
     await db.select().from(jobs).where(eq(jobs.idempotencyKey, failKey))
   )[0];
@@ -263,7 +263,8 @@ async function main() {
     payload: {},
     maxAttempts: 1,
   });
-  await runWorker({ maxJobs: 5 });
+  // This one is deliberately not a noop, so the filter has to admit it.
+  await runWorker({ maxJobs: 5, onlyTypes: ["noop", "does_not_exist"] });
   const unknown = (
     await db
       .select()
@@ -395,7 +396,7 @@ async function main() {
     idempotencyKey: rerunKey,
     payload: { sleepMs: 0 },
   });
-  await runWorker({ maxJobs: 5 });
+  await runWorker({ maxJobs: 5, onlyTypes: ["noop"] });
   const rerun = await enqueue({
     workspaceId: ws.id,
     type: "noop",

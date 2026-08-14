@@ -17,6 +17,9 @@
     "screenshots": "node --conditions=react-server --import tsx scripts/screenshots.ts",
     "pairs": "node --conditions=react-server --import tsx scripts/pairs.ts",
     "submission": "node --import tsx scripts/build-submission.ts",
+    "refresh": "node --conditions=react-server --import tsx scripts/refresh.ts",
+    "figures": "node --conditions=react-server --import tsx scripts/figures.ts",
+    "layout-check": "python scripts/layout_check.py",
     "pdf": "node --import tsx scripts/pdf.ts"
   },
   "dependencies": {

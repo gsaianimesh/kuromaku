@@ -21,7 +21,24 @@ const IMAGE_DIRS = [
   path.join(ROOT, "docs", "images", "pairs"),
 ];
 
+/**
+ * Screenshots of Okara, the product this one was built against. Unlike every
+ * other image here these were not captured by a script in this repository —
+ * they came from a first-hand session with someone else's product, and they are
+ * the only evidence a reader has that section 2 describes something real.
+ */
+const EVIDENCE_DIR = path.join(ROOT, "submission", "evidence");
+
+/**
+ * Missing evidence normally fails the build, exactly like a missing screenshot.
+ * `--allow-missing-evidence` omits the figure instead and says so on stderr,
+ * for building the rest of the document before the images are dropped in. It
+ * never substitutes anything.
+ */
+const ALLOW_MISSING_EVIDENCE = process.argv.includes("--allow-missing-evidence");
+
 const missing: string[] = [];
+const missingEvidence: string[] = [];
 let embeddedBytes = 0;
 
 /*
@@ -43,6 +60,19 @@ async function resolveShot(name: string): Promise<string | null> {
     }
   }
   return best?.file ?? null;
+}
+
+async function resolveEvidence(name: string): Promise<string | null> {
+  for (const ext of [".png", ".jpg", ".jpeg", ".webp"]) {
+    const p = path.join(EVIDENCE_DIR, name + ext);
+    try {
+      await stat(p);
+      return p;
+    } catch {
+      /* keep looking */
+    }
+  }
+  return null;
 }
 
 async function dataUri(file: string): Promise<string> {
@@ -138,13 +168,32 @@ async function render(md: string): Promise<string> {
       continue;
     }
 
-    // Shot with caption: ![alt](shot:name)
-    const img = line.match(/^!\[([^\]]*)\]\(shot:([a-z0-9-]+)\)(?:\{(before|after)\})?\s*$/i);
+    // Image: ![alt](shot:name) from the capture scripts, or ![alt](evidence:name)
+    // from submission/evidence — screenshots of the product this one answers.
+    const img = line.match(
+      /^!\[([^\]]*)\]\((shot|evidence):([a-z0-9-]+)\)(?:\{(before|after)\})?\s*$/i,
+    );
     if (img) {
       closeList();
-      const [, alt, name, side] = img;
-      const file = await resolveShot(name);
+      const [, alt, kind, name, side] = img;
+      const isEvidence = kind.toLowerCase() === "evidence";
+      const file = isEvidence ? await resolveEvidence(name) : await resolveShot(name);
       if (!file) {
+        if (isEvidence) {
+          missingEvidence.push(name);
+          if (!ALLOW_MISSING_EVIDENCE) {
+            i++;
+            continue;
+          }
+          // Skip the figure *and* its caption, so no caption is left orphaned
+          // describing an image that is not there.
+          i++;
+          while (i < lines.length && lines[i].trim() === "") i++;
+          if (i < lines.length && /^:\s/.test(lines[i])) {
+            while (i < lines.length && lines[i].trim() !== "") i++;
+          }
+          continue;
+        }
         missing.push(name);
         i++;
         continue;
@@ -153,20 +202,29 @@ async function render(md: string): Promise<string> {
       const badge = side
         ? `<div class="shot-badge ${side.toLowerCase()}">${side.toLowerCase()}</div>`
         : "";
-      // Caption is the next non-empty line if it starts with "Note".
+
+      /*
+       * A caption is an explicit `: ` line following the image. The old rule
+       * took any following paragraph beginning "Note", which quietly made the
+       * word load-bearing: rewording a caption to open differently detached it
+       * from its image and turned it into body text.
+       */
       let caption = "";
       let j = i + 1;
       while (j < lines.length && lines[j].trim() === "") j++;
-      if (j < lines.length && /^Note\b/i.test(lines[j].trim())) {
+      const isCaption =
+        j < lines.length && (/^:\s/.test(lines[j]) || /^Note\b/i.test(lines[j].trim()));
+      if (isCaption) {
         const capLines: string[] = [];
         while (j < lines.length && lines[j].trim() !== "") capLines.push(lines[j++]);
-        caption = capLines.join(" ").trim();
+        caption = capLines.join(" ").trim().replace(/^:\s*/, "");
         i = j;
       } else {
         i++;
       }
       out.push(
-        `<figure class="shot">${badge}<img src="${uri}" alt="${alt.replace(/"/g, "&quot;")}" />` +
+        `<figure class="shot${isEvidence ? " evidence" : ""}">${badge}` +
+          `<img src="${uri}" alt="${alt.replace(/"/g, "&quot;")}" />` +
           (caption ? `<figcaption>${inline(caption)}</figcaption>` : "") +
           `</figure>`,
       );
@@ -300,6 +358,7 @@ pre.code {
   line-height: 1.5;
   margin: 0 0 1.1em;
   break-inside: avoid;
+  page-break-inside: avoid;
 }
 pre.code code { background: none; padding: 0; font-size: inherit; }
 blockquote {
@@ -313,9 +372,18 @@ blockquote {
 hr { border: none; border-top: 1px solid var(--rule); margin: 2.2em 0; }
 figure.shot {
   margin: 0.85em 0 1.05em;
+  /*
+   * An image and its caption are one unit. break-inside alone is honoured by
+   * the modern engine; the legacy property is kept because print pipelines vary
+   * and a caption printed under the next image is worse than a page break.
+   */
   break-inside: avoid;
+  page-break-inside: avoid;
   position: relative;
 }
+figure.shot img { break-after: avoid; page-break-after: avoid; }
+figure.shot figcaption { break-before: avoid; page-break-before: avoid; }
+figure.evidence img { border-color: var(--accent); }
 figure.shot img {
   width: 100%;
   height: auto;
@@ -358,13 +426,16 @@ figure.pair {
   border-radius: 5px;
   background: #fbfcfd;
   /*
-   * The frame may split across a page; the shots inside it may not. Holding
-   * the whole pair together cost four pages of white, and a before/after that
-   * spans a fold still reads correctly because both halves are badge-labelled.
+   * A pair is one unit and does not split. Letting the frame break saved a few
+   * pages and produced the worst artefact in the document: three pairs printed
+   * as a title above an empty bordered box, with the images they introduce on
+   * the following page. A before/after the reader has to turn a page to compare
+   * is not a before/after.
    */
-  break-inside: auto;
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
-figure.pair > figure.shot { break-inside: avoid; }
+figure.pair > figure.shot { break-inside: avoid; page-break-inside: avoid; }
 .pair-title {
   font-family: "SF Mono", Menlo, monospace;
   font-size: 8.4pt;
@@ -421,6 +492,27 @@ async function main() {
       "\nCapture them (npm run screenshots / npm run pairs) rather than removing the reference.",
     );
     process.exit(1);
+  }
+
+  if (missingEvidence.length > 0) {
+    const names = [...new Set(missingEvidence)];
+    console.error(
+      `\n${ALLOW_MISSING_EVIDENCE ? "OMITTED" : "Missing"} Okara evidence image(s):\n`,
+    );
+    for (const m of names) {
+      console.error(`  - submission/evidence/${m}.{png,jpg,jpeg,webp}`);
+    }
+    if (!ALLOW_MISSING_EVIDENCE) {
+      console.error(
+        "\nSection 2 asserts nine defects in a product the reader has never seen; these" +
+          "\nscreenshots are the evidence. Drop them in, or pass --allow-missing-evidence" +
+          "\nto build without them and ship a document that only asserts.",
+      );
+      process.exit(1);
+    }
+    console.error(
+      "\nBuilt without them. The figures and their captions were omitted, not substituted.",
+    );
   }
 
   const html = `<!doctype html>

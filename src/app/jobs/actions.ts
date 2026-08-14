@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { refuseOnDemo } from "@/lib/demo";
 import { enqueue } from "@/lib/jobs/queue";
 import { runWorker, type WorkerResult } from "@/lib/jobs/worker";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
@@ -66,6 +67,10 @@ export async function enqueueNoopAction(
 export type RunState = { result: WorkerResult; at: string } | null;
 
 export async function runWorkerAction(): Promise<RunState> {
+  // Draining the queue runs whatever is in it, and that includes compiles and
+  // agent runs. Gating only the compile button would have left the back door.
+  refuseOnDemo("Running the worker");
+
   const result = await runWorker({ maxJobs: 10 });
   revalidatePath("/jobs");
   return { result, at: new Date().toISOString() };

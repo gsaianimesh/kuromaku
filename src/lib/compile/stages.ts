@@ -77,7 +77,29 @@ const KEY_CANDIDATES = [
 
 const normaliseEnvelope = (raw: unknown): unknown => {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
-  const obj = raw as Record<string, unknown>;
+  let obj = raw as Record<string, unknown>;
+
+  /*
+   * Keyed-object form: `{ "plain-claims": { rule, doExample, ... } }`. The model
+   * used the record's name as the property rather than putting it in a `key`
+   * field, which is a perfectly reasonable reading of "give each record a key"
+   * and one nothing here handled — the payload then contained no top-level
+   * string, key derivation found nothing, and the record was discarded.
+   *
+   * Only for a single-entry object whose sole value is itself an object, so a
+   * flattened record with one field cannot be mistaken for this.
+   */
+  const entries = Object.entries(obj);
+  if (
+    entries.length === 1 &&
+    !ENVELOPE_KEYS.has(entries[0][0]) &&
+    typeof entries[0][1] === "object" &&
+    entries[0][1] !== null &&
+    !Array.isArray(entries[0][1])
+  ) {
+    const [name, body] = entries[0] as [string, Record<string, unknown>];
+    obj = { ...body, key: typeof body.key === "string" ? body.key : name };
+  }
 
   const out: Record<string, unknown> = {
     sourceIndices: obj.sourceIndices ?? obj.source_indices,
@@ -229,7 +251,19 @@ Prefer specifics over adjectives. "Runs on macOS" is a fact; "beautifully design
     instruction: `Identify the ideal customer profiles the site is written for.
 value: { "segment": string, "description": string, "painPoints": string[], "whereTheyGather": string[] }
 key: kebab-case segment name, e.g. "solo-founders".
-"whereTheyGather" should name real communities or platforms only if the material supports it.`,
+
+Emit a segment only if the source text addresses it. The test is whether you can
+point at a sentence: a stated audience, a described workflow, a named pain, a
+pricing or platform choice that implies who this is for. An audience the product
+could plausibly also serve is not a segment — do not reach for adjacent creative
+or business roles because the category usually has them.
+
+Prefer three well-grounded segments to six speculative ones. If the material
+supports only one, emit one.
+
+Every painPoint must paraphrase something the material actually says.
+"whereTheyGather" should name real communities or platforms only if the material
+supports it; leave it empty rather than guessing.`,
   },
   {
     id: "positioning",

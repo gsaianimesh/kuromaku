@@ -35,6 +35,15 @@ type Shot = {
   crop?: string;
   /** Text that must appear somewhere, as a second guard against an empty state. */
   mustContain?: string[];
+  /**
+   * Capture the whole scrollable page rather than the window.
+   *
+   * Off by default. A context shot of a long route ran to 21,000 pixels and
+   * cost five printed pages while showing nothing the window did not, so the
+   * default is what a viewer actually sees. Turn it on only where the whole
+   * page *is* the claim — a version chain that must be shown unbroken — and
+   * expect the document to pay for it in pages.
+   */
   fullPage?: boolean;
   /** Elements to open before capturing (details/summary toggles). */
   expand?: string;
@@ -104,7 +113,7 @@ async function capture(page: Page, shot: Shot) {
   } else {
     await page.screenshot({
       path: file.replace(/\.png$/, ".jpg"),
-      fullPage: shot.fullPage ?? true,
+      fullPage: shot.fullPage ?? false,
       type: "jpeg",
       quality: 82,
     });
@@ -171,13 +180,22 @@ async function main() {
       crop: "section:has(h2:text-is('Product facts')) li:has(a[href^='http'])",
       note: "one record with its source link, snippet and confidence",
     },
+    /*
+     * A record with no source of its own but with parents in the derivation
+     * graph. This replaced a shot of the red "No source." warning, which no
+     * longer has a state to photograph: once derivation counts as provenance,
+     * every record in this workspace accounts for itself and nothing is
+     * ungrounded. The warning path is still reachable and still asserted by the
+     * golden set — it just is not reachable here, and inventing a record to
+     * photograph it would be the one thing this document promises not to do.
+     */
     {
-      file: "memory-unsourced.png",
+      file: "memory-derived.png",
       route: "/memory",
-      requires: "li:has-text('No source.')",
-      crop: "li:has-text('No source.')",
-      mustContain: ["No source."],
-      note: "an unsourced record with its warning",
+      requires: "li:has-text('compiled from:')",
+      crop: "li:has-text('compiled from:')",
+      mustContain: ["compiled from:"],
+      note: "a derived record naming the records it was compiled from",
     },
     {
       file: "competitor-sourced.png",
@@ -191,6 +209,8 @@ async function main() {
       route: `/memory/${versioned?.id ?? ""}`,
       requires: "li:has-text('superseded')",
       mustContain: ["Version history", "superseded", "active"],
+      // The whole chain is the claim; cutting it at the fold cuts the evidence.
+      fullPage: true,
       note: "version chain: superseded versions and the active one",
     },
     {

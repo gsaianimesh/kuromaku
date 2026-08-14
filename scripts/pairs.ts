@@ -24,11 +24,17 @@ const OUT = path.join(process.cwd(), "docs", "images", "pairs");
 
 const failures: string[] = [];
 
-/** Full-page context shots compress well as JPEG; crops keep PNG for crisp text. */
+/** Context shots compress well as JPEG; crops keep PNG for crisp text. */
 async function shoot(
   page: Page,
   file: string,
-  opts: { route: string; requires: string; crop?: string; mustContain?: string[] },
+  opts: {
+    route: string;
+    requires: string;
+    crop?: string;
+    mustContain?: string[];
+    fullPage?: boolean;
+  },
 ) {
   await page.goto(`${BASE}${opts.route}`, { waitUntil: "networkidle", timeout: 60_000 });
 
@@ -60,7 +66,8 @@ async function shoot(
   } else {
     await page.screenshot({
       path: path.join(OUT, `${file}.jpg`),
-      fullPage: true,
+      // Window, not whole page: see the note on Shot.fullPage in screenshots.ts.
+      fullPage: opts.fullPage ?? false,
       type: "jpeg",
       quality: 82,
     });

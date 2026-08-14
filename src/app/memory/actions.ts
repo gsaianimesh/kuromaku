@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { demoRefusal } from "@/lib/demo";
 import { editRecord } from "@/lib/memory";
 import { enqueue } from "@/lib/jobs/queue";
 import { runWorker } from "@/lib/jobs/worker";
@@ -13,6 +14,9 @@ export type CompileState = {
 } | null;
 
 export async function startCompileAction(): Promise<CompileState> {
+  const refused = demoRefusal("Queueing a compile");
+  if (refused) return refused;
+
   const ws = await getOrCreateDefaultWorkspace();
   const { job, created } = await enqueue({
     workspaceId: ws.id,
@@ -37,6 +41,9 @@ export async function runCompileNowAction(): Promise<{
   log: string[];
   outcome: string | null;
 }> {
+  const refused = demoRefusal("Running a compile");
+  if (refused) return { log: [refused.message], outcome: "refused" };
+
   const result = await runWorker({ maxJobs: 2, budgetMs: 280_000 });
   revalidatePath("/memory");
   revalidatePath("/jobs");

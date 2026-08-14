@@ -126,7 +126,7 @@ Walks the definition of done against real model calls.
 The results of those checks are visible in the UI rather than only in the
 script's output:
 
-![The metrics page showing the chart, per-agent distances, memory health and observations](images/metrics.png)
+![The metrics page showing the chart, per-agent distances, memory health and observations](images/metrics.jpg)
 
 Note the "Memory health" panel — active records, unsourced count and proportion,
 average confidence — which is the same data the `e2e` provenance checks assert

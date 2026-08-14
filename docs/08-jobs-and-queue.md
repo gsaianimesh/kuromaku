@@ -311,7 +311,7 @@ The workaround and its consequences are in
 
 ## The queue in the UI
 
-![The jobs queue table with status counts](images/jobs.png)
+![The jobs queue table with status counts](images/jobs.jpg)
 
 Note the status counts across the top, and the attempts column showing
 `attempts/maxAttempts` per job — a job at `1/3` has failed once and is waiting
@@ -320,7 +320,7 @@ out its backoff.
 Each job links to an inspector showing everything recorded about it, including
 every model call it made:
 
-![Job inspector showing job metadata, reason, payload and model calls](images/job-inspector.png)
+![Job inspector showing job metadata, reason, payload and model calls](images/job-inspector.jpg)
 
 Note the "Why this was scheduled" panel — that is `jobs.reason`, written at
 enqueue time — and the "Model calls" panel header summarising call count, total

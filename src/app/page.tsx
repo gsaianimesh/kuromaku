@@ -155,8 +155,12 @@ export default async function Home() {
             <p className="text-[18px] font-mono group-hover:text-accent">
               {mem.total}
             </p>
-            {mem.unsourced > 0 && (
+            {mem.unsourced > 0 ? (
               <p className="text-[11px] text-bad">{mem.unsourced} unsourced</p>
+            ) : (
+              <p className="text-[11px] text-dim">
+                {mem.sourced} sourced, {mem.derived} derived
+              </p>
             )}
           </Link>
           <Link href="/review" className="block group">

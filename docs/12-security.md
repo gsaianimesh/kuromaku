@@ -11,6 +11,29 @@ The controls that do exist protect against three things: leaking the model API
 key, publishing without a human, and a crawler that misbehaves against someone
 else's site.
 
+## Demo mode
+
+`DEMO_MODE=1` refuses the actions that spend the owner's money or touch the
+owner's credentials:
+
+| action | why |
+|---|---|
+| `startCompileAction`, `runCompileNowAction` | a compile is nine model calls |
+| `runWorkerAction` | draining the queue runs whatever is in it, compiles included |
+| `runCrawlNowAction` | drains the queue, and fetches a third-party site |
+| `saveModelKeyAction`, `clearModelKeyAction` | an anonymous visitor must not replace or delete a stored BYOK key |
+
+Everything else stays open. Reading memory, following provenance, editing a
+record and watching what goes stale, approving a draft — those are the claims
+the public instance exists to let someone check, and none of them costs
+anything.
+
+This is a refusal list, not authentication, and [15-known-limitations](15-known-limitations.md)
+says so plainly. It protects the wallet and the key; it does not protect the
+data. `/health` reports whether the gate is on, so a visitor can confirm it
+rather than take the claim on trust.
+
+
 ## BYOK key encryption
 
 [`src/lib/crypto.ts`](../src/lib/crypto.ts). AES-256-GCM with a versioned wire
@@ -88,7 +111,7 @@ export function maskSecret(plaintext: string): string {
 }
 ```
 
-![Settings showing the model key as a masked value with only the last four characters](images/settings.png)
+![Settings showing the model key as a masked value with only the last four characters](images/settings.jpg)
 
 Note the key renders as `••••••••` plus four characters. The screenshot script
 additionally scans `/settings` for anything matching `gsk_…`, `tvly-…` or
@@ -201,7 +224,7 @@ Reddit, Product Hunt or LinkedIn. The only outbound HTTP is:
 
 The publish UI states the constraint rather than leaving it implicit:
 
-![The publish screen explaining that no agent posts anywhere](images/publish.png)
+![The publish screen explaining that no agent posts anywhere](images/publish.jpg)
 
 Note the "How publishing works here" panel and the per-channel instruction —
 Hacker News and Reddit say explicitly that automated posting breaks their rules

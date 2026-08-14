@@ -13,30 +13,32 @@ Demo walkthrough: section 4 of this document
 
 ## 0. How to read this
 
-This document is the demo. There is no video, so section 4 carries the full walkthrough: every screen, in the order you would visit it, with enough narration that you never need to open the application to follow what happened.
+This document is the demo. There is no video, so section 4 carries the walkthrough: every screen, in the order you would visit it, narrated closely enough that you need not open the application.
 
-The other sections give it context. Section 1 says what the system is. Section 2 says what it was built against, which is a list of specific defects observed in a real product. Section 3 explains how it fits together. Section 5 covers verification. Section 6 is the honest list of what is missing.
+The rest is context. Section 1, what the system is. Section 2, the defects it was built against. Section 3, how it fits together. Section 5, verification. Section 6, what is missing.
 
 ### About the screenshots
 
 Every image in this document was captured from the running application against its real database, by a committed script.
 
 ```
-scripts/screenshots.ts   nineteen static shots
+scripts/screenshots.ts   twenty static shots
 scripts/pairs.ts         before and after pairs for state changes
 ```
 
-Both scripts navigate to a real route, wait for a selector proving the expected content actually rendered, and **refuse to capture** if it did not. A missing state produces a failed run and a named error, not a substituted placeholder. The screenshot script also scans the settings page for anything shaped like an API key and aborts rather than writing an image with a credential in it. Nothing here was mocked, staged in a fake page, or edited after capture. Regenerate the set with `npm run dev`, then `npm run screenshots` and `npm run pairs`.
+Each navigates to a real route, waits for a selector proving the content rendered, and **refuses to capture** if it did not: a missing state produces a named error, never a placeholder. The screenshot script also scans the settings page for anything shaped like an API key and aborts rather than write an image with a credential in it. Nothing was mocked, staged, or edited after capture. Regenerate with `npm run dev`, then `npm run screenshots` and `npm run pairs`.
 
-Because a static document cannot show a transition, the five state changes that matter most appear twice, labelled *before* and *after*. In every case the change between the two shots was made by calling the real code path, never by writing the after state directly into the database.
+A static document cannot show a transition, so the five state changes that matter appear twice, labelled *before* and *after*. Each change was made by calling the real code path, never by writing the after state into the database.
 
 ### What you can check yourself
 
+The live instance is a demo workspace holding no credentials and no private data, deliberately left open so the claims below can be checked; the actions that would spend the owner's model credits are refused there, and `/health` reports whether that gate is on. Section 6 explains why an authenticated deployment would need more than this.
+
 At the live URL, without any setup:
 
-- `/memory` shows the compiled records with their sources and confidence. Compare any record to the same one in this document.
+- `/memory` shows the compiled records with their sources, their derivation parents and their confidence. Compare any record to the same one in this document.
 - `/planner` shows which prioritised channels have no agent.
-- `/api/v1/memory` returns the same records as JSON, each carrying its sources and an `unsourced` flag.
+- `/api/v1/memory` returns the same records as JSON, each carrying its sources, a `grounding` value and the records it was compiled from.
 - `/api/mcp` returns the MCP tool manifest.
 - `/health` reports environment, database, migration and encryption checks, and answers 503 if any fails.
 
@@ -49,15 +51,15 @@ In the repository:
 
 ## 1. What this is
 
-Kuromaku crawls a company website, compiles the extracted text into a set of versioned records called a memory, and runs channel agents that draft marketing work from that memory. Drafts go to a human. Published work accumulates observations, and those observations change what gets scheduled next.
+Kuromaku crawls a company website, compiles the text into versioned records called a memory, and runs channel agents that draft from it. Drafts go to a human. Published work accumulates observations, and those observations change what gets scheduled next.
 
-The insight worth keeping from the product it rebuilds is the shared strategy layer. Agents do not each re-derive context. They read one compiled set of records, which is why output stays consistent across channels. Everything else in this system exists to fix something that layer does not do.
+One idea from the product it rebuilds is worth keeping: the shared strategy layer. Agents do not each re-derive context, they read one compiled set of records, and that is why output stays consistent across channels. Everything else here exists to fix something that layer does not do.
 
 ### Five commitments
 
 Each is visible in the interface, not only in the code.
 
-**Provenance on every fact.** No memory record exists without a source URL or an explicit human assertion, plus a confidence value. A record the compiler cannot ground is still written, flagged, and capped below 0.5 confidence.
+**Provenance on every fact.** Every record accounts for itself in one of three ways: a source URL, a human assertion, or a named set of records it was compiled from. All three carry a confidence value, and the third cannot claim more confidence than the least certain record beneath it. A record with none of the three is still written, flagged in red, and capped at 0.4.
 
 **Versioned memory with staleness propagation.** Records are append only. Editing supersedes rather than overwrites. Every artifact records which memory records it came from, and editing a record marks derived artifacts stale, transitively.
 
@@ -75,47 +77,45 @@ These are enforced, not merely unbuilt.
 
 **It does not display an unmeasured number.** Where nothing was observed the interface says so in words. A model with no entry in the pricing table produces a null cost that renders as "unpriced", never as $0.00.
 
-**It does not authenticate users.** Version one is single tenant with no login. Every table carries a workspace id, so multi tenancy is a routing change rather than a migration, but no such routing exists.
+**It does not authenticate users.** Version one is single tenant with no login. Every table carries a workspace id, so multi tenancy is a routing change rather than a migration, but no such routing exists. The public demo compensates with a refusal list, not a login: `DEMO_MODE=1` blocks compiling, crawling, draining the queue and writing a model key. That is a stopgap for one deployment, not a security model, and section 6 says so.
 
 ## 2. What it was built against
 
-The following defects were observed in a first hand session with Okara. They are not from its marketing. Each one became a requirement, and each is answered by a specific mechanism.
+These defects come from a first hand session with Okara, not from its marketing. Each one became a requirement. Three are shown here in Okara's own interface; the full session record is the companion document `Okara-Recon-Notes.pdf`.
 
-**Strategy and execution were disconnected.** Its own strategy ranked Product Hunt third and founder communities fourth. It had no agent for either, while shipping UGC video and influencer agents its strategy never asked for. The agent catalogue was fixed and unrelated to the plan.
+![Okara's dashboard](evidence:okara-dashboard)
 
-*Answered by:* the planner compares compiled priorities against the registry and writes a coverage gap where nothing can execute. Section 4, step 3.
+: Okara's dashboard. The strategy, the roadmap and the agent catalogue as the product presents them.
 
-**The thirty day roadmap was a dead document.** Empty checkboxes in a PDF. No state, nothing executing it.
+**Strategy and execution were disconnected.** Its strategy ranked Product Hunt third and founder communities fourth. It had no agent for either. It did ship a UGC video agent and an influencer agent, which the strategy never asks for. The catalogue was fixed, and nothing in the product noticed the mismatch.
 
-*Answered by:* roadmap items compile into memory records, and the planner turns them into real jobs with real status.
+![Okara's channel prioritisation, ranking channels it has no agent for](evidence:okara-channels)
 
-**No staleness tracking.** Editing the ICP left every derived draft unchanged and unflagged.
+: Okara's channel ranking. Nothing here connects a rank to whether anything can act on it.
 
-*Answered by:* records are append only, and editing one marks every artifact derived from it stale, through the derivation chain. Section 4, step 2.
+This is the defect the planner exists to answer: it compares compiled priorities against the agent registry and writes a coverage gap wherever nothing can execute. Step 3.
 
-**Rationale without evidence.** Drafts carried a prose "why this works" panel with no links, no named threads, no data, and no way to tell which memory record informed the choice.
+**The thirty day roadmap was a dead document.** Empty checkboxes in a PDF. Here, roadmap items compile into memory records and the planner turns them into jobs with real status.
 
-*Answered by:* structured evidence on every draft, each item resolving to a memory record page or a real URL. Section 4, step 4.
+**No staleness tracking.** Editing the ICP left every draft derived from it unchanged and unflagged. Records here are append only, and editing one marks every artifact downstream of it stale through the derivation chain. Step 2, which is the step worth reading if you only read one.
+
+**Rationale without evidence.** Drafts carried a prose "why this works" panel — no links, no named threads, no data, no way to tell which part of the strategy informed the choice. Replaced with structured evidence on every draft, each item resolving to a memory record page or a real URL. Step 4.
 
 **Fabricated metrics.** Unpublished drafts rendered invented like and view counts.
 
-*Answered by:* nothing displays a number that was not observed. Empty states say why they are empty. Section 4, step 5.
+![An Okara X draft showing engagement counts for a post that was never published](evidence:okara-x-draft)
 
-**Duplicate execution.** The entire onboarding pipeline ran twice in one session, including all research searches. One search query fired twice inside a single run.
+: An unpublished X draft carrying engagement figures. The post does not exist, so there is nothing these numbers could have been measured from.
 
-*Answered by:* every job carries an idempotency key enforced by a partial unique index, and research is cached and deduplicated by normalised query hash.
+Nothing in this system displays a number that was not observed, and empty states say why they are empty. Step 5.
 
-**No provenance.** Facts were asserted flat. It listed integrations and a latency claim with no source. Wrong facts got baked into memory and repeated by every agent afterwards.
+**Duplicate execution.** The onboarding pipeline ran twice in one session, including every research search, and one query fired twice inside a single run. Every job here carries an idempotency key enforced by a partial unique index; research is cached and deduplicated by normalised query hash. That normalisation had a bug of its own, which section 5 describes.
 
-*Answered by:* citations are resolved against what the model was actually shown. A hallucinated source index is dropped and the record is capped below 0.5 confidence. Section 4, step 1.
+**No provenance.** Facts were asserted flat. It listed integrations and a latency claim with no source, and once a wrong fact was in memory every agent repeated it. This is the one the whole design is bent around. Citations are resolved against what the model was actually shown, so an index it invents resolves to nothing and is dropped. What is left then decides the record's ceiling: a record with a resolved citation keeps the confidence the model gave it, a record with no citation but with parents in the derivation graph cannot exceed the least confident record it rests on, and a record with neither is capped at 0.4 and flagged in red. Step 1.
 
-**Voice inferred from a landing page.** Socials were skipped and it proceeded, inferring brand voice from marketing copy.
+**Voice inferred from a landing page.** Socials were skipped and it carried on, taking brand voice from marketing copy. Voice rules here compile per locale, and a locale with no source material in that language yields low confidence rules that state the gap rather than translated rules presented as observed.
 
-*Answered by:* voice rules compile per locale. A locale with no source material in that language yields low confidence rules that say the material is missing, rather than translated rules presented as observed.
-
-**Performance was optional and unused.** The whole pipeline completed with Search Console and Analytics skipped, and nothing degraded.
-
-*Answered by:* observations are a planner input, and their absence changes scheduling. Section 4, step 5.
+**Performance was optional and unused.** The pipeline completed with Search Console and Analytics skipped and nothing degraded. Observations are a planner input here, so their absence changes what gets scheduled. Step 5.
 
 ## 3. How it fits together
 
@@ -195,35 +195,45 @@ Start at `/memory`. This is the compiled memory: nine record types, each row car
 
 ![The memory browser grouped by record type](shot:memory-full)
 
-Note the header counts: active records, how many are unsourced, average confidence, and the locales present. Each type is its own panel with its own unsourced count in the panel hint, so the quality of the memory is legible before reading a single record.
+: The header counts active records, how many are sourced, derived and ungrounded, the average confidence, and the locales present. Each type panel repeats its own counts in the hint, so the quality of the memory is legible before reading a single record.
 
 Open any product fact and look underneath the value.
 
 ![A memory record with its confidence, locale, origin, version, source link and snippet](shot:memory-record-sourced)
 
-Note the badge row: confidence 0.90, locale `en`, origin `compiled`, version `v6`. Below the JSON value are the resolved sources, each a clickable link to the page it came from, and beneath each one, in quotes, the snippet the model cited as supporting text. That snippet is text the model claimed appears in that source.
+: The badge row carries confidence, locale, origin and version. Below the JSON value are the resolved sources, each a link to the page it came from, and beneath each one, in quotes, the snippet the model cited. That snippet is text the model claimed appears in that source.
 
-Now find a row badged `unsourced`. There will be several.
+Not every record can cite a page. A positioning statement is not written anywhere on the site; the compiler builds it from product facts and ICP segments. Those records name what they were built from.
 
-![An unsourced memory record showing a red warning reading No source](shot:memory-unsourced)
+![A memory record with no source of its own, naming the records it was compiled from](shot:memory-derived)
 
-Note the confidence reads 0.40. That is not a number the model chose. It is a cap applied at write time to any record with no resolvable citation:
+: No source line, because no page states this. Instead, `compiled from:` and the records it was built on, each a link. Following one reaches a record that does cite a page.
+
+Confidence follows the same graph. A record with a citation keeps what the model gave it. A derived record is capped at the confidence of the least certain record beneath it — it cannot be surer than its own foundation, and the number comes from the graph rather than a constant someone picked:
 
 ```ts
-// Unsourced records are capped below 0.5 regardless of what the model claimed.
+const parentFloor =
+  parents.length > 0 ? Math.min(...parents.map((p) => p.confidence)) : null;
+
 const confidence =
-  citations.length === 0 ? Math.min(emitted.confidence, 0.4) : emitted.confidence;
+  citations.length > 0
+    ? emitted.confidence
+    : parentFloor !== null
+      ? Math.min(emitted.confidence, parentFloor)
+      : Math.min(emitted.confidence, 0.4);
 ```
 
-The record was not dropped. Dropping it would lose information and make the memory look cleaner than it is. It was written, flagged and capped, and the warning tells a reader what they are looking at: an unverified inference, not a fact.
+The last branch is the one that earns a red warning: a record with no citation *and* no parent, which nothing in the system can account for. It is written anyway rather than dropped — dropping it would make the memory look cleaner than it is — then capped at 0.4 and flagged.
+
+**There are none of those in this workspace.** Every one of the 46 active records is either sourced or derived. That is worth stating rather than quietly omitting, because an earlier version of this document showed a screenshot of the warning: back then derivation did not count as provenance, and fifteen records that the compiler could fully account for were being displayed in red at 0.40. Fixing that emptied the category. The path still exists, the golden set still asserts it, and a product fact the compiler cannot ground would still land there — that stage has no parents to fall back on.
 
 The competitors section is worth a look for the opposite reason.
 
 ![A competitor record with its resolved source link](shot:competitor-sourced)
 
-Note this record carries a real source URL from a web search, not from the company's own site. Competitors are the one stage that runs research. When no search provider is configured, this section produces nothing at all rather than a list of plausible sounding names, and the compile log records why.
+: The source URL here came from a web search, not the company's own site. Competitors are the one stage that runs research. With no search provider configured the section produces nothing at all rather than a list of plausible sounding names, and the compile log records why.
 
-**The defect this answers.** Okara asserted facts flat, with no source. It listed integrations and a latency claim that were simply wrong, and every agent then repeated them. Here an ungrounded claim cannot hide: it is capped by the writer rather than the model, it is labelled in the interface, and the count of unsourced records is on the page header.
+**The defect this answers.** Okara asserted facts flat, with no source. It listed integrations and a latency claim that were simply wrong, and every agent repeated them afterwards. The drafts in step 4 make a latency claim too — "results in about 0.2 seconds" — and that one traces to `product_fact: quick-recall` at 0.90 confidence, cited to the page it was read from. The difference is not that this system avoids specifics. It is that a specific has somewhere to lead.
 
 ### Step 2. Versioned memory, and what an edit invalidates
 
@@ -231,7 +241,7 @@ This is the step that matters most. Records are append only: nothing is updated 
 
 ![The full version history of one memory record](shot:2c-history-full)
 
-Note that the page shows every version, newest first, and that nothing was deleted: v7 is active with origin `human`, and v6 down to v1 are all superseded, each keeping its own sources. Further down the same page, a panel headed "What an edit here would invalidate" lists the records compiled from this one, grouped by how many hops away they are.
+: Every version, newest first, nothing deleted. The top row is active with origin `human`; the rest are superseded and keep their own sources. Further down the same page a panel headed "What an edit here would invalidate" lists the records compiled from this one, grouped by how many hops away they are.
 
 Here are the two ends of one chain, side by side.
 
@@ -239,11 +249,11 @@ Here are the two ends of one chain, side by side.
 
 ![The superseded version of a memory record](shot:2a-history-superseded){before}
 
-Note the badge reads `superseded` with origin `compiled`. This is what the compiler produced. It is retained in full, with its own sources, and remains readable forever.
+: `superseded`, origin `compiled` — what the compiler produced. Retained in full, with its own sources, readable forever.
 
 ![The active version of the same record](shot:2b-history-active){after}
 
-Note the badge reads `active` with origin `human`, and the version number has advanced. The value differs from the version above it. A human corrected the record, and that correction became a new row rather than an overwrite.
+: `active`, origin `human`, version advanced, value changed. The correction became a new row rather than an overwrite.
 
 :::
 
@@ -258,7 +268,7 @@ await db.insert(recordSources).values({
 });
 ```
 
-Without that row a human edited record would count as unsourced and get a warning, which would be wrong. A person asserting something is a form of provenance, just not a URL.
+Without that row a human edited record would count as ungrounded and get a warning, which would be wrong. A person asserting something is a form of provenance, just not a URL.
 
 #### What the edit does downstream
 
@@ -268,11 +278,11 @@ Here is a draft in the review queue immediately before a memory edit, and the sa
 
 ![A draft's evidence panel before any memory edit](shot:1a-draft-before){before}
 
-Note the evidence panel lists memory record keys as links, and nothing is flagged. This draft is ordinary pending work.
+: The evidence panel lists memory record keys as links and nothing is flagged. Ordinary pending work.
 
 ![The same draft carrying a stale banner naming the changed record](shot:1b-draft-after-stale){after}
 
-Note the banner names the specific record that changed, not just "this is out of date". Where the change was inherited rather than direct, it says how far upstream it happened and which record on the path was affected. A "Regenerate from current memory" button enqueues a fresh run of the same agent.
+: The banner names the record that changed, not just "this is out of date". This draft cited that record directly, so the line is short; when the change is inherited the same banner says how many hops upstream it happened and which record on the path carried it. "Regenerate from current memory" enqueues a fresh run of the same agent.
 
 :::
 
@@ -291,13 +301,13 @@ with recursive downstream(id, depth, path) as (
 select distinct id from downstream
 ```
 
-That graph is real: on the current workspace it holds 199 edges, and a single product fact reaches 19 records across three hops, through ICP segments, then positioning, then messaging pillars. Editing the fact marks every artifact citing any of them.
+That graph is real: 928 edges on the current workspace, with chains four hops deep. The edit captured above reached 39 records and marked 8 artifacts stale. Editing the fact marks every artifact citing any of them.
 
 Propagating one hop would have been much easier and would have looked identical in a demo where the draft happens to cite the edited record directly. It would also have reproduced the original defect one level down: correct a product fact, and the positioning built on it keeps looking current.
 
 ![The review queue after the edit](shot:1b-review-after-full)
 
-Note the status counts at the top of the queue have changed. Stale is a first class artifact status, not a warning banner bolted on, which is what lets the queue be filtered and counted by it.
+: The status counts at the top of the queue have changed. Stale is a first class artifact status rather than a warning bolted on, which is what lets the queue be filtered and counted by it.
 
 **The defect this answers.** Editing the ICP in Okara left every derived draft unchanged and unflagged. There was no way to tell which work rested on a fact you had just corrected. Here the edit names its own consequences, and the version you corrected stays readable next to the one that replaced it.
 
@@ -307,7 +317,7 @@ Go to `/planner`. The left of this screen is what the strategy compiled. The rig
 
 ![Channel priorities compared against agent coverage](shot:planner-full)
 
-Note the coverage column reading `covered` or `no agent`. It is computed from the agent registry at request time, so registering an agent changes it immediately, with no migration and no re-compile.
+: The coverage column reads `covered` or `no agent`, computed from the registry at request time. Registering an agent changes it immediately, with no migration and no re-compile.
 
 The registry is seeded in code and is deliberately shorter than the channel list the compiler can produce:
 
@@ -323,7 +333,7 @@ Two agents cover six channels. The compiler can prioritise ten. What happens to 
 
 ![The coverage gaps list](shot:planner-gaps)
 
-Note each gap carries the rank the strategy assigned and a sentence explaining that nothing can draft for it. These are real: the compiler ranked Reddit fourth and LinkedIn fifth, and the registry contains neither. The planner did not attempt them and did not skip them quietly. It wrote a row that someone has to look at.
+: Each gap carries the rank the strategy assigned and a sentence saying nothing can draft for it. The planner neither attempted these channels nor skipped them quietly; it wrote a row someone has to look at.
 
 In code the gap is the output, and the `continue` is what makes it so:
 
@@ -340,7 +350,7 @@ Where an agent does exist, the job carries the reason it was scheduled.
 
 ![A scheduled job with its plain language reason](shot:planner-reason)
 
-Note the reason quotes the compiled rationale verbatim, so the chain from strategy to scheduled work is readable without opening the memory browser. That text is written to the job row at enqueue time. It is stored data, not a sentence regenerated for display.
+: The reason quotes the compiled rationale verbatim, so the chain from strategy to scheduled work reads without opening the memory browser. It is written to the job row at enqueue time — stored data, not a sentence regenerated for display.
 
 **The defect this answers.** Okara's own strategy ranked Product Hunt third and founder communities fourth while shipping agents for neither, and shipping UGC video and influencer agents its strategy never asked for. The catalogue was fixed and unrelated to the plan. Here the plan and the catalogue are compared on one screen, and the difference is recorded rather than hidden.
 
@@ -350,7 +360,7 @@ Go to `/review`. This is the daily surface.
 
 ![The review queue](shot:review-full)
 
-Note each artifact shows its channel, kind, agent, critic score and status. Everything needed to triage is on the card.
+: Channel, kind, agent, critic score and status. Everything needed to triage is on the card.
 
 Beside the content is the evidence panel, and every item in it is a link.
 
@@ -358,11 +368,11 @@ Beside the content is the evidence panel, and every item in it is a link.
 
 ![A draft's evidence panel with record keys as links](shot:5a-evidence-panel){before}
 
-Note each entry names the record type and key, and the trailing note explains what the item is. An entry attributed by the runner rather than named by the model says so explicitly.
+: Each entry names the record type and key, and the trailing note explains what the item is. An entry attributed by the runner rather than named by the model says so.
 
 ![The memory record page reached by clicking one of those links](shot:5b-record-landed){after}
 
-Note that the record you land on carries its own sources, its own confidence, and its own version history. The trail continues: from draft, to the record it used, to the page that record came from.
+: The record you land on carries its own sources, confidence and version history. The trail continues: draft, to the record it used, to the page that record came from.
 
 :::
 
@@ -382,13 +392,13 @@ Beside the evidence sits the critic, which reviewed the draft before any human s
 
 ![The critic panel showing a score and a named violation](shot:review-critic)
 
-Note the violation is specific. It names the voice rule it breaks, quotes the offending phrase, and carries a severity. A draft scoring below 0.7 is revised once automatically and then re-scored, so the number shown always describes the text on screen. When that happens the panel says so.
+: The violation names the voice rule it breaks, quotes the offending phrase, and carries a severity. A draft scoring below 0.7 is revised once and re-scored, so the number shown always describes the text on screen, and the panel says when that happened.
 
 Cost is not hidden either. Every model call is logged with its tokens and price.
 
 ![A single logged model call with tokens, cost and duration](shot:job-inspector-call)
 
-Note the four measured figures, and that the prompt and raw output are both expandable. An unpriced model renders as "unpriced" rather than $0.00, because a zero would claim the call was free rather than that its model has no price entry.
+: Four measured figures, with the prompt and raw output both expandable. An unpriced model renders as "unpriced" rather than $0.00, because a zero would claim the call was free rather than that its model has no price entry.
 
 **The defect this answers.** Okara's drafts carried a prose "why this works" panel with no links, no named threads, no data, and no reference to which memory record informed the choice. Worse, it rendered invented like and view counts on drafts that had never been published. Here every claim about provenance is a link, and every number is either measured or absent.
 
@@ -398,7 +408,7 @@ Go to `/publish`.
 
 ![The publish screen and its copy and confirm flow](shot:publish)
 
-Note the panel explaining that no agent posts anywhere. For Hacker News and Reddit the instruction says plainly that automated posting breaks their rules and is not implemented. The only supported flow is copy the text, post it yourself, then paste the resulting URL.
+: No agent posts anywhere. For Hacker News and Reddit the instruction says plainly that automated posting breaks their rules and is not implemented. The only supported flow is copy the text, post it yourself, then paste the resulting URL.
 
 That confirmation is gated in code:
 
@@ -418,11 +428,11 @@ Once something is live, record what actually happened. Here is the performance p
 
 ![The observations panel showing an explanatory empty state](shot:4a-performance-empty){before}
 
-Note it does not show zeros. It says no performance has been observed yet, and explains why that is different: a zero would claim something was measured and found to be nothing, while an empty state says nothing was measured.
+: No zeros. It says no performance has been observed yet, and explains why that differs: a zero claims something was measured and found to be nothing.
 
 ![The same panel after an observation is recorded](shot:4b-performance-recorded){after}
 
-Note the figure, its metric, its channel and its source. Observations are only ever inserted. No code path derives, estimates or backfills one.
+: The figure, its metric, its channel and its source. Observations are only ever inserted; no code path derives, estimates or backfills one.
 
 :::
 
@@ -432,11 +442,11 @@ Now the part that makes this a loop rather than a report. Here is the planner sc
 
 ![The planner scheduling work for a channel](shot:3a-planner-scheduled){before}
 
-Note the scheduled job and its reason. At this point the channel is ranked, covered by an agent, and nothing blocks it.
+: The channel is ranked, covered by an agent, and nothing blocks it.
 
 ![The planner skipping the same channel with the reason visible](shot:3b-planner-gated){after}
 
-Note the reason text: recent artifacts exist in that channel and none of them have any observation recorded, so the planner declines to draft more until someone measures the work already done.
+: Recent artifacts exist in that channel and none carry an observation, so the planner declines to draft more until someone measures the work already done.
 
 :::
 
@@ -456,28 +466,29 @@ A single recent draft is not enough to gate: one draft is not a pattern. And a c
 
 ![The metrics screen](shot:metrics)
 
-Note the memory health panel, and that the edit distance chart draws only the days that actually have reviews. It does not zero fill and does not interpolate, which is why with two reviews on one day it shows two points and no line. The chart is correct. The claim it exists to support needs weeks of data this system has not yet accumulated, and section 6 says so rather than implying otherwise.
+: The edit distance chart draws only the days that actually have reviews. No zero fill, no interpolation, which is why a single day of reviews shows points and no line. The chart is correct; the claim it exists to support needs weeks of data this system has not accumulated, and section 6 says so.
 
 **The defect this answers.** Okara's entire pipeline completed with Search Console and Analytics skipped, and nothing degraded. Performance data was never an input to planning. Here the absence of measurement is itself an input, and it changes what gets scheduled.
 
 ## 5. How it is verified
 
-There is no unit test suite. What exists instead is three executable scripts that assert against a real database and, for two of them, real model calls. That trade and its costs are stated plainly in section 6.
+There is no unit test suite. There are three executable scripts that assert against a real database, two of them against real model calls. Section 6 states what that costs.
 
 **`npm run verify`** runs the infrastructure checks with no model calls: environment, connectivity, migration state, the encryption round trip, and the whole queue contract. It reads the raw key column back to confirm the plaintext does not appear in it, and it asserts that two concurrent claims take different rows, a throwing job requeues with backoff, exhausted attempts mark it failed and release its key, and a job whose worker died is recovered rather than stranded. It is non destructive: any existing key is restored and every job it creates is deleted.
 
-**`npm run e2e`** walks the definition of done against real model calls. The last full run passed all fifteen checks. Selected evidence from that run:
+**`npm run e2e`** walks the definition of done against real model calls. The last full run passed all 21 checks. Selected evidence from that run:
 
-- Re-compiling supersedes rather than duplicating: 48 active against 52 superseded, all 52 carrying a predecessor id, versions reaching 3
-- Maximum confidence among unsourced records: 0.40, which is the cap rather than a model's claim
-- Coverage gaps: Reddit at rank 4, LinkedIn at rank 5
-- A draft with four evidence items and a critic score of 0.95
-- A recorded edit distance of 0.0580
+- Re-compiling supersedes rather than duplicating: 46 active against 216 superseded, 203 rows carrying a predecessor id, versions reaching 10
+- Every record accounts for itself: 31 sourced, 15 derived, 0 ungrounded
+- No derived record more confident than what it rests on, across all 15
+- Coverage gaps: Reddit at rank 3, LinkedIn at rank 5
+- A draft with 10 evidence items and a critic score of 0.85
+- A recorded edit distance of 0.0857
 - The planner gating an unobserved channel with the reason quoted above
-- Editing a cited record marking one artifact stale and creating one successor
-- Model calls logged with tokens and cost
+- Editing a cited record marking 2 artifacts stale and creating one successor
+- 116 model calls logged, 112 of them priced, $0.1164 total
 
-**`npm run eval`** runs a golden set of twenty fixed cases. It departs from the brief it was written against, and says so in the file:
+**`npm run eval`** runs a golden set of twenty fixed cases against real model calls. It departs from the brief it was written against, and says so in the file:
 
 ```ts
 /**
@@ -499,7 +510,15 @@ Verification is only worth describing if it found something.
 
 **Fixtures leaking into real state.** The pair capture script inserted two drafts directly, bypassing the runner that enforces the evidence invariant, and never removed them. The interface flagged them correctly, with "No evidence. This should be impossible", and that warning reached a screenshot in a draft of this document. The script now attaches evidence like any real draft and deletes its fixtures once the pair is captured. The same review found the observation fixture accumulating one row per run, under a caption reading "a single observation".
 
-**A runaway recursive query.** Introduced while building the derivation graph for this document. `UNION` deduplicates the whole row, so a node reachable at several depths produced one row per depth and diamond shaped paths multiplied out. It hung a real capture run on a 199 edge graph. Carrying the visited path and excluding nodes already on it fixed it, and the same query now returns in under a second.
+**A runaway recursive query.** Introduced while building the derivation graph for this document. `UNION` deduplicates the whole row, so a node reachable at several depths produced one row per depth and diamond shaped paths multiplied out. It hung a capture run on a graph of 199 edges. Carrying the visited path and excluding nodes already on it fixed it; the graph has since grown to 928 edges and the same query returns in under a second.
+
+**An aggregate that quietly returned zero.** The memory health header counts sourced, derived and ungrounded records in one pass. Expressed through the query builder, the correlated subqueries failed to bind the outer row, so every bucket came back empty: a memory with 31 sourced records reported none, and the page said so in its header without complaining. Nothing threw. The fix is the same statement written raw with its own alias, and the embarrassing part is that the number was on screen for a while before I read it rather than glanced at it.
+
+**A test suite grading the wrong papers.** `npm run verify` enqueues its own jobs and asserts on what becomes of them, but the worker claims the oldest queued row of any type. With real work sitting in the queue it was claiming that instead, and seven checks failed describing rows the script had never created. `claimNext` now takes an optional type filter and the script uses it. The queue was fine the whole time.
+
+**A golden set testing a layer nothing uses.** Six compiler cases went red the moment the compile model changed, reporting records with no key and no confidence — while the compiler itself was producing perfectly good keyed records from the same output. The assertions read the raw JSON; the compiler never does, because `emittedRecord` normalises first and derives a key from the payload when the model omits one. The assertions now run against the normalised record, which is the thing the system actually stores.
+
+**An unbounded sleep inside a job.** On a long `retry-after`, a rate-limited call sat waiting while holding its lock. One drain spent twenty-three minutes with no model call in flight and no way to tell from outside whether it was working or wedged. A job now refuses to wait longer than ninety seconds and hands itself back to the queue, which already knows how to retry with backoff. Scripts, which have no queue to fall back on, raise the ceiling explicitly.
 
 ## 6. Limits and what comes next
 
@@ -529,7 +548,7 @@ Verification is only worth describing if it found something.
 
 **No pagination anywhere,** in the interface or the API. Lists are capped and a workspace exceeding those caps silently sees a truncated view.
 
-**No authentication at all.** Every control described in this document assumes a trusted operator. This must not be deployed publicly as it stands.
+**No authentication at all.** Every control described in this document assumes a trusted operator. The public demo instance runs with `DEMO_MODE=1`, which refuses the four actions that spend money or touch credentials — compiling, crawling, draining the queue, and writing a model key. Everything else, including editing memory and approving drafts, is open to anyone who finds the URL, because being checkable is the point of that instance. This is a refusal list, not authentication: it protects the owner's wallet and key, not the data, and any deployment holding something worth protecting needs the real thing.
 
 **No unit tests, no UI tests, no CI, nothing hermetic.** The three scripts all require a live database, and two require a live model provider. The cost was concrete and is described in section 5.
 
@@ -541,7 +560,7 @@ Verification is only worth describing if it found something.
 
 **Make the compiler resumable.** Stages already commit independently. Recording which stages completed against which source version would turn a ten minute all or nothing job into restartable work, which fixes the serverless timeout problem properly rather than working around it.
 
-**Persist the compile summary.** Per stage counts exist only as text in a job log. A table would make memory quality a trend rather than an anecdote, and the unsourced ratio over time is the best single indicator of whether the crawl and the prompts are improving.
+**Persist the compile summary.** Per stage counts exist only as text in a job log. A table would make memory quality a trend rather than an anecdote, and the sourced-to-derived ratio over time is the best single indicator of whether the crawl and the prompts are improving.
 
 **Unit tests for the pure functions.** Edit distance, duration parsing, slug generation, URL canonicalisation, query normalisation, the envelope normaliser. All pure, all edge case heavy, all untested, and demonstrably where the bugs have been.
 

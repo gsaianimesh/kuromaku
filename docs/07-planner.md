@@ -123,7 +123,7 @@ fourth and `linkedin` fifth, and the registry contains neither.
 The same comparison is shown as a table, strategy on the left and executable
 coverage on the right:
 
-![Channel priorities table with covered and no agent badges](images/planner-full.png)
+![Channel priorities table with covered and no agent badges](images/planner-full.jpg)
 
 Note the `covered` / `no agent` column — it is computed from
 `coveredChannels()` over the registry, so it changes the moment an agent is

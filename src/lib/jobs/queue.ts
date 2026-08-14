@@ -85,8 +85,25 @@ export async function enqueue(input: EnqueueInput): Promise<EnqueueResult> {
  * Safe to call concurrently: SKIP LOCKED means competing workers take
  * different rows rather than blocking on each other.
  */
-export async function claimNext(): Promise<Job | null> {
+/**
+ * Claims the next runnable job.
+ *
+ * `onlyTypes` narrows the claim to those types. It exists for callers that must
+ * not be confounded by unrelated work: the queue verification script enqueues
+ * its own jobs and asserts on what happens to them, and with real jobs sitting
+ * in the queue it was claiming those instead — seven checks failed describing
+ * rows the script had never created.
+ */
+export async function claimNext(onlyTypes?: string[]): Promise<Job | null> {
   const db = getDb();
+  const typeFilter =
+    onlyTypes && onlyTypes.length > 0
+      ? sql` and type in (${sql.join(
+          onlyTypes.map((t) => sql`${t}`),
+          sql`, `,
+        )})`
+      : sql``;
+
   const [claimed] = await db
     .update(jobs)
     .set({
@@ -97,7 +114,7 @@ export async function claimNext(): Promise<Job | null> {
     .where(
       sql`${jobs.id} = (
         select id from ${jobs}
-        where status = 'queued' and run_after <= now()
+        where status = 'queued' and run_after <= now()${typeFilter}
         order by run_after asc, created_at asc
         for update skip locked
         limit 1

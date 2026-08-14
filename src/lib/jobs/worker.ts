@@ -31,6 +31,8 @@ export type WorkerResult = {
 export type WorkerOptions = {
   /** Most jobs to process in one invocation. */
   maxJobs?: number;
+  /** Restrict this run to these job types. See `claimNext`. */
+  onlyTypes?: string[];
   /** Wall-clock budget, so a serverless invocation returns before its timeout. */
   budgetMs?: number;
 };
@@ -52,7 +54,7 @@ export async function runWorker(
       break;
     }
 
-    const job = await claimNext();
+    const job = await claimNext(opts.onlyTypes);
     if (!job) break;
 
     const jobStartedAt = Date.now();

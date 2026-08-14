@@ -23,13 +23,21 @@ export type ModelTask = "compile" | "critique" | "draft" | "classify";
 
 export const MODEL_CONFIG: Record<ModelProviderId, Record<ModelTask, string>> = {
   groq: {
-    // gpt-oss-120b is the stronger model but reports the lowest token budget on
-    // this tier (8,000/min against llama-3.3-70b's 12,000), and large compile
-    // prompts routinely stalled inside it. Compilation is the longest chain and
-    // the most budget-hungry, so it runs on the model that can actually finish.
-    compile: "llama-3.3-70b-versatile",
+    /*
+     * gpt-oss-120b everywhere the output is read by a person. It reports the
+     * lowest token budget on this tier — 8,000 per minute against
+     * llama-3.3-70b's 12,000 — and that ceiling is per request as well as per
+     * minute, so prompts have to be sized against it rather than the context
+     * window. They are: see SOURCES_CHAR_BUDGET in compile/index.ts.
+     *
+     * The earlier arrangement ran compilation on llama-3.3-70b to avoid that
+     * work. It finished faster and compiled an ICP segment the source material
+     * never mentions, which then propagated into every draft written from it.
+     * Waiting out a rate limit is cheaper than that.
+     */
+    compile: "openai/gpt-oss-120b",
     critique: "openai/gpt-oss-120b",
-    draft: "llama-3.3-70b-versatile",
+    draft: "openai/gpt-oss-120b",
     classify: "llama-3.1-8b-instant",
   },
   anthropic: {
@@ -64,6 +72,8 @@ export type RunModelInput = {
   jsonMode?: boolean;
   /** Surfaces provider rate-limit waits into the job log. */
   onWait?: (message: string) => void;
+  /** See `ModelRequest.maxWaitMs`. Scripts raise it; jobs leave it alone. */
+  maxWaitMs?: number;
 };
 
 export class NoModelKeyError extends Error {
@@ -106,6 +116,7 @@ export async function runModel(input: RunModelInput): Promise<ModelResponse> {
         maxTokens: input.maxTokens,
         jsonMode: input.jsonMode,
         onWait: input.onWait,
+        maxWaitMs: input.maxWaitMs,
       },
       resolved.key,
     );

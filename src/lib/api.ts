@@ -27,8 +27,13 @@ export type ApiMemoryRecord = {
   confidence: number;
   version: number;
   origin: string;
+  /** "sourced" | "derived" | "ungrounded". See lib/memory.ts. */
+  grounding: string;
+  /** True only for "ungrounded": nothing in the system grounds this record. */
   unsourced: boolean;
   sources: Array<{ url: string | null; snippet: string | null }>;
+  /** Records this one was compiled from. Populated when grounding is "derived". */
+  derivedFrom: Array<{ id: string; type: string; key: string }>;
 };
 
 function toApi(r: RecordWithSources): ApiMemoryRecord {
@@ -41,8 +46,10 @@ function toApi(r: RecordWithSources): ApiMemoryRecord {
     confidence: r.confidence,
     version: r.version,
     origin: r.origin,
+    grounding: r.grounding,
     unsourced: r.unsourced,
     sources: r.sources.map((s) => ({ url: s.url, snippet: s.snippet })),
+    derivedFrom: r.derivedFrom.map((p) => ({ id: p.id, type: p.type, key: p.key })),
   };
 }
 

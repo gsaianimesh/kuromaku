@@ -233,6 +233,9 @@ async function main() {
         messages: [{ role: "user", content: input.user }],
         maxTokens: 2000,
         jsonMode: true,
+        // A script has no queue to requeue into, so it can afford to wait out
+        // a burst limit rather than abandon the run.
+        maxWaitMs: 600_000,
         onWait: (m) => process.stdout.write(`\r  ${m}${" ".repeat(20)}`),
       });
       out = { text: response.text, parsed: extractJson(response.text) };

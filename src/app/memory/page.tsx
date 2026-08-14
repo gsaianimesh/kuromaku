@@ -11,6 +11,7 @@ import { sourceStats } from "@/lib/sources";
 import { searchAvailability } from "@/lib/search";
 import type { MemoryType } from "@/lib/db/schema";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
+import { DEMO_MODE } from "@/lib/demo";
 import { CompileControls, EditRecordForm } from "./memory-controls";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +37,8 @@ function RecordRow({ record }: { record: RecordWithSources }) {
               {record.origin}
             </Badge>
             {record.version > 1 && <Badge>v{record.version}</Badge>}
-            {record.unsourced && <Badge tone="bad">unsourced</Badge>}
+            {record.grounding === "derived" && <Badge tone="idle">derived</Badge>}
+            {record.grounding === "ungrounded" && <Badge tone="bad">unsourced</Badge>}
           </div>
 
           <pre className="text-[11px] font-mono text-muted whitespace-pre-wrap break-words mt-1.5">
@@ -44,10 +46,35 @@ function RecordRow({ record }: { record: RecordWithSources }) {
           </pre>
 
           <div className="mt-1.5">
-            {record.unsourced ? (
+            {record.grounding === "ungrounded" ? (
               <p className="text-[11px] text-bad">
-                No source. This record is not grounded in any crawled page or
-                search result — treat it as an unverified inference.
+                No source. This record is not grounded in any crawled page,
+                search result, or other record — treat it as an unverified
+                inference.
+              </p>
+            ) : record.grounding === "derived" ? (
+              /*
+               * A derived record has no URL of its own because no page states
+               * it; it was compiled from records that do. Naming those, as
+               * links, is the provenance. Calling it "unsourced" said the
+               * system could not account for it, which was never true.
+               */
+              <p className="text-[11px] text-dim">
+                <span className="text-muted">compiled from:</span>{" "}
+                {record.derivedFrom.map((p, i) => (
+                  <span key={p.id}>
+                    {i > 0 && <span className="text-muted">, </span>}
+                    <Link
+                      href={`/memory/${p.id}`}
+                      className="text-accent hover:underline"
+                    >
+                      {p.type}: {p.key}
+                    </Link>
+                    {p.status === "superseded" && (
+                      <span className="text-warn"> (superseded)</span>
+                    )}
+                  </span>
+                ))}
               </p>
             ) : (
               <ul className="space-y-0.5">
@@ -119,6 +146,8 @@ export default async function MemoryPage() {
         <h1 className="text-[15px] font-medium">Memory</h1>
         <div className="flex items-center gap-1.5 flex-wrap">
           <Badge tone={stats.total > 0 ? "ok" : "idle"}>{stats.total} active</Badge>
+          <Badge tone="ok">{stats.sourced} sourced</Badge>
+          {stats.derived > 0 && <Badge>{stats.derived} derived</Badge>}
           {stats.unsourced > 0 && (
             <Badge tone="bad">{stats.unsourced} unsourced</Badge>
           )}
@@ -132,6 +161,14 @@ export default async function MemoryPage() {
       </div>
 
       <Panel title="Compile" hint={`${srcStats.count} source(s) available`}>
+        {DEMO_MODE && (
+          <p className="text-[11px] text-warn mb-2.5 pb-2.5 border-b border-edge/60">
+            This is the public demo instance. Compiling is disabled here because
+            it spends the owner&rsquo;s model credits — everything else on this
+            page, including editing a record and watching what goes stale, works
+            normally. Clone the repository to run a compile.
+          </p>
+        )}
         <CompileControls sourceCount={srcStats.count} />
         {!search.configured && (
           <p className="text-[11px] text-warn mt-2.5 pt-2.5 border-t border-edge/60">
@@ -152,14 +189,15 @@ export default async function MemoryPage() {
       ) : (
         MEMORY_TYPE_ORDER.filter((t) => grouped.has(t)).map((type) => {
           const rows = grouped.get(type)!;
+          const derived = rows.filter((r) => r.grounding === "derived").length;
           const unsourced = rows.filter((r) => r.unsourced).length;
           return (
             <Panel
               key={type}
               title={MEMORY_TYPE_LABELS[type]}
               hint={`${rows.length} record${rows.length === 1 ? "" : "s"}${
-                unsourced > 0 ? ` · ${unsourced} unsourced` : ""
-              }`}
+                derived > 0 ? ` · ${derived} derived` : ""
+              }${unsourced > 0 ? ` · ${unsourced} unsourced` : ""}`}
             >
               <ul>
                 {rows.map((r) => (
